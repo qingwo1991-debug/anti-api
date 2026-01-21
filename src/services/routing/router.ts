@@ -11,6 +11,7 @@ import { getProviderModels, isHiddenCodexModel } from "./models"
 import { buildMessageStart, buildContentBlockStart, buildTextDelta, buildInputJsonDelta, buildContentBlockStop, buildMessageDelta, buildMessageStop } from "~/lib/translator"
 import { formatLogTime, setRequestLogContext } from "~/lib/logger"
 import type { AuthProvider } from "~/services/auth/types"
+import { recordUsage } from "~/services/usage-tracker"
 
 export class RoutingError extends Error {
     status: number
@@ -25,7 +26,23 @@ interface RoutedRequest {
     model: string
     messages: ClaudeMessage[]
     tools?: ClaudeTool[]
+    toolChoice?: {
+        type: "auto" | "any" | "tool" | "none"
+        name?: string
+    }
     maxTokens?: number
+}
+
+type FlowStickyState = {
+    cursor: number
+    lastProbeAt?: number
+}
+
+type ProviderUsage = {
+    usage?: {
+        inputTokens?: number
+        outputTokens?: number
+    }
 }
 
 function isEntryUsable(entry: RoutingEntry): boolean {
@@ -39,6 +56,7 @@ function isEntryUsable(entry: RoutingEntry): boolean {
 const routerRateLimits = new Map<string, number>()  // "provider:accountId" -> expiry timestamp
 const PROVIDER_ORDER: AuthProvider[] = ["antigravity", "codex", "copilot"]
 let officialModelIndex: Map<string, Set<AuthProvider>> | null = null
+const flowStickyStates = new Map<string, FlowStickyState>()
 
 function getRouterRateLimitKey(provider: string, accountId: string): string {
     return `${provider}:${accountId}`
@@ -58,6 +76,19 @@ function isRouterRateLimited(provider: string, accountId: string): boolean {
 function markRouterRateLimited(provider: string, accountId: string, durationMs: number = 30000): void {
     const key = getRouterRateLimitKey(provider, accountId)
     routerRateLimits.set(key, Date.now() + durationMs)
+}
+
+function getFlowStickyState(flowKey: string, entriesLength: number): FlowStickyState {
+    const existing = flowStickyStates.get(flowKey)
+    if (!existing) {
+        const state = { cursor: 0 }
+        flowStickyStates.set(flowKey, state)
+        return state
+    }
+    if (existing.cursor < 0 || existing.cursor >= entriesLength) {
+        existing.cursor = 0
+    }
+    return existing
 }
 
 function buildOfficialModelIndex(): Map<string, Set<AuthProvider>> {
@@ -192,6 +223,7 @@ function getAccountDisplay(provider: AuthProvider, accountId: string): string {
 }
 
 const FALLBACK_STATUSES = new Set([401, 403, 408, 429, 500, 503, 529])
+const FLOW_PROBE_INTERVAL_MS = 30_000
 
 function isAccountUnavailableError(error: unknown): boolean {
     if (!(error instanceof Error)) return false
@@ -204,7 +236,36 @@ function isTransientTransportError(error: unknown): boolean {
 }
 
 function shouldFallbackOnUpstream(error: UpstreamError): boolean {
+    if ((error as any).streamingStarted) return false
+    if (error.status === 429) {
+        return isQuotaExhausted(error)
+    }
     return FALLBACK_STATUSES.has(error.status)
+}
+
+function isQuotaExhausted(error: UpstreamError): boolean {
+    if (error.status !== 429) return false
+    const body = (error.body || "").trim()
+    if (!body) return false
+
+    if (body.startsWith("{") || body.startsWith("[")) {
+        try {
+            const json = JSON.parse(body)
+            const details = json?.error?.details
+            if (Array.isArray(details)) {
+                for (const detail of details) {
+                    if (detail?.reason === "QUOTA_EXHAUSTED") return true
+                }
+            }
+        } catch {
+            // ignore parse errors
+        }
+    }
+
+    const lower = body.toLowerCase()
+    if (lower.includes("quota_exhausted")) return true
+    if (lower.includes("quota") && lower.includes("reset")) return true
+    return false
 }
 
 function getFlowKey(model: string): string {
@@ -245,68 +306,196 @@ function resolveFlowEntries(config: RoutingConfig, model: string): RoutingEntry[
     return entries
 }
 
+function resolveFlowSelection(config: RoutingConfig, model: string): { flowKey: string; entries: RoutingEntry[] } {
+    const flowKey = getFlowKey(model)
+    const entries = normalizeEntries(selectFlowEntries(config, model))
+    if (entries.length === 0) {
+        throw new RoutingError(`No flow routing entries configured for model "${model}"`, 400)
+    }
+    return { flowKey, entries }
+}
+
 function resolveAccountEntries(config: RoutingConfig, model: string): AccountRoutingEntry[] {
     return resolveAccountRoutingEntries(config, model)
 }
 
-async function createFlowCompletionWithEntries(request: RoutedRequest, entries: RoutingEntry[]) {
+function shouldSkipFlowEntry(
+    entry: RoutingEntry,
+    entriesLength: number,
+    options: { ignoreRateLimit?: boolean } = {}
+): boolean {
+    const ignoreRateLimit = options.ignoreRateLimit ?? false
+    if (entry.provider === "antigravity") {
+        const accountId = entry.accountId === "auto" ? undefined : entry.accountId
+        if (!ignoreRateLimit && accountId && entriesLength > 1) {
+            const isLimited = accountManager.isAccountRateLimited(accountId) || isRouterRateLimited("antigravity", accountId)
+            if (isLimited) return true
+            if (accountManager.isAccountInFlight(accountId)) return true
+        }
+        return false
+    }
+
+    if (!ignoreRateLimit && authStore.isRateLimited(entry.provider, entry.accountId)) {
+        return true
+    }
+
+    const account = authStore.getAccount(entry.provider, entry.accountId)
+    return !account
+}
+
+function applyFlowRateLimit(entry: RoutingEntry, error: UpstreamError, requestModel: string): void {
+    if (entry.provider === "antigravity" && entry.accountId !== "auto") {
+        accountManager
+            .markRateLimitedFromError(entry.accountId, error.status, error.body, error.retryAfter, requestModel, { maxDurationMs: 30_000 })
+            .then((limit) => {
+                const duration = limit?.durationMs ?? 30_000
+                markRouterRateLimited("antigravity", entry.accountId, duration)
+            })
+            .catch(() => {
+                markRouterRateLimited("antigravity", entry.accountId, 30_000)
+            })
+        return
+    }
+
+    if (entry.provider !== "antigravity") {
+        authStore.markRateLimited(entry.provider, entry.accountId, error.status, error.body, error.retryAfter)
+        markRouterRateLimited(entry.provider, entry.accountId, 60000)
+    }
+}
+
+function advanceFlowCursor(flowState: FlowStickyState | null, entries: RoutingEntry[], startIndex: number): void {
+    if (!flowState || entries.length <= 1) return
+    for (let offset = 1; offset < entries.length; offset++) {
+        const nextIndex = (startIndex + offset) % entries.length
+        const candidate = entries[nextIndex]
+        if (!shouldSkipFlowEntry(candidate, entries.length)) {
+            flowState.cursor = nextIndex
+            return
+        }
+    }
+}
+
+function recordProviderUsage(modelId: string, completion: ProviderUsage | null | undefined): void {
+    if (!completion?.usage) return
+    const inputTokens = completion.usage.inputTokens ?? 0
+    const outputTokens = completion.usage.outputTokens ?? 0
+    if (inputTokens > 0 || outputTokens > 0) {
+        recordUsage(modelId, inputTokens, outputTokens)
+    }
+}
+
+function shouldProbeFlowHead(flowState: FlowStickyState | null, error: UpstreamError): boolean {
+    if (!flowState || error.status !== 429) return false
+    if (!isQuotaExhausted(error)) return false
+    const now = Date.now()
+    if (!flowState.lastProbeAt || now - flowState.lastProbeAt >= FLOW_PROBE_INTERVAL_MS) {
+        flowState.lastProbeAt = now
+        return true
+    }
+    return false
+}
+
+async function createFlowCompletionWithEntries(request: RoutedRequest, entries: RoutingEntry[], flowKey?: string) {
     let lastError: Error | null = null
+    let probedHead = false
+    const flowState = flowKey ? getFlowStickyState(flowKey, entries.length) : null
+    const startIndex = flowState?.cursor ?? 0
 
-    for (const entry of entries) {
+    const attemptEntry = async (entry: RoutingEntry) => {
+        if (entry.provider === "antigravity") {
+            const accountId = entry.accountId === "auto" ? undefined : entry.accountId
+            setRequestLogContext({ model: entry.modelId, provider: "antigravity", account: entry.accountId })
+            return await createChatCompletionWithOptions({ ...request, model: entry.modelId }, {
+                accountId,
+                allowRotation: accountId ? false : true,
+            })
+        }
+
+        const account = authStore.getAccount(entry.provider, entry.accountId)
+        if (!account) {
+            throw new Error("Account not found")
+        }
+        const accountDisplay = account.login || account.email || entry.accountId
+        setRequestLogContext({ model: entry.modelId, provider: entry.provider, account: accountDisplay })
+
+        if (entry.provider === "codex") {
+            const startTime = Date.now()
+            const result = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+            recordProviderUsage(entry.modelId, result)
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+            return result
+        }
+
+        if (entry.provider === "copilot") {
+            const startTime = Date.now()
+            const result = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+            recordProviderUsage(entry.modelId, result)
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+            return result
+        }
+
+        throw new Error("Unsupported provider")
+    }
+
+    for (let index = startIndex; index < entries.length; index++) {
+        const entry = entries[index]
+        if (shouldSkipFlowEntry(entry, entries.length)) {
+            continue
+        }
         try {
-            if (entry.provider === "antigravity") {
-                const accountId = entry.accountId === "auto" ? undefined : entry.accountId
-                // Skip rate-limited antigravity accounts (check both accountManager and router-level)
-                if (accountId && entries.length > 1) {
-                    const isLimited = accountManager.isAccountRateLimited(accountId) || isRouterRateLimited("antigravity", accountId)
-                    if (isLimited) continue
-                }
-                setRequestLogContext({ model: entry.modelId, provider: "antigravity", account: entry.accountId })
-                return await createChatCompletionWithOptions({ ...request, model: entry.modelId }, {
-                    accountId,
-                    allowRotation: accountId ? false : true,
-                })
+            const result = await attemptEntry(entry)
+            if (flowState) {
+                flowState.cursor = index
             }
-
-            if (authStore.isRateLimited(entry.provider, entry.accountId) && entries.length > 1) {
-                continue
-            }
-
-            const account = authStore.getAccount(entry.provider, entry.accountId)
-            if (!account) {
-                continue
-            }
-            const accountDisplay = account.login || account.email || entry.accountId
-            setRequestLogContext({ model: entry.modelId, provider: entry.provider, account: accountDisplay })
-
-            if (entry.provider === "codex") {
-                const startTime = Date.now()
-                const result = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
-                return result
-            }
-
-            if (entry.provider === "copilot") {
-                const startTime = Date.now()
-                const result = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
-                return result
-            }
+            return result
         } catch (error) {
             lastError = error as Error
             if (entry.provider === "antigravity" && isAccountUnavailableError(error)) {
                 continue
             }
             if (error instanceof UpstreamError && shouldFallbackOnUpstream(error)) {
-                // 🆕 修复：标记 rate-limited（同时更新 accountManager 和 router 级别状态）
-                if (entry.provider === "antigravity" && entry.accountId !== "auto") {
-                    accountManager.markRateLimitedFromError(entry.accountId, error.status, error.body)
-                    markRouterRateLimited("antigravity", entry.accountId, 60000)  // 🆕 Router 级别也标记
-                } else if (entry.provider !== "antigravity") {
-                    authStore.markRateLimited(entry.provider, entry.accountId, error.status, error.body, error.retryAfter)
-                    markRouterRateLimited(entry.provider, entry.accountId, 60000)  // 🆕 Router 级别也标记
+                applyFlowRateLimit(entry, error, request.model)
+                if (flowState && index === startIndex) {
+                    advanceFlowCursor(flowState, entries, startIndex)
+                }
+
+                if (
+                    flowState &&
+                    index === startIndex &&
+                    flowState.cursor === startIndex &&
+                    !probedHead &&
+                    entries.length > 1 &&
+                    (isQuotaExhausted(error) || shouldProbeFlowHead(flowState, error))
+                ) {
+                    const probeIndex = 0
+                    if (probeIndex !== index) {
+                        const probeEntry = entries[probeIndex]
+                        if (!shouldSkipFlowEntry(probeEntry, entries.length, { ignoreRateLimit: true })) {
+                            probedHead = true
+                            try {
+                                const probeResult = await attemptEntry(probeEntry)
+                                flowState.cursor = probeIndex
+                                return probeResult
+                            } catch (probeError) {
+                                lastError = probeError as Error
+                                if (probeError instanceof UpstreamError && shouldFallbackOnUpstream(probeError)) {
+                                    applyFlowRateLimit(probeEntry, probeError, request.model)
+                                } else if (isTransientTransportError(probeError)) {
+                                    if (probeEntry.provider !== "antigravity") {
+                                        authStore.markRateLimited(probeEntry.provider, probeEntry.accountId, 500, (probeError as Error).message)
+                                    }
+                                } else {
+                                    throw probeError
+                                }
+                            }
+                        }
+                    }
+
+                    if (index < entries.length - 1) {
+                        flowState.cursor = index + 1
+                    }
                 }
                 continue
             }
@@ -320,24 +509,46 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
         }
     }
 
-    // 🆕 如果所有 entries 都被跳过（rate-limited），清除状态并重试第一个
     if (!lastError && entries.length > 0) {
-        // 清除 router 级别的 rate-limit 状态
-        for (const entry of entries) {
-            routerRateLimits.delete(getRouterRateLimitKey(entry.provider, entry.accountId))
-        }
-        // 清除 accountManager 的 rate-limit 状态
-        accountManager.clearAllRateLimits()
+        const fallbackIndex = flowState?.cursor ?? 0
+        const entry = entries[fallbackIndex]
+        try {
+            if (entry.provider === "antigravity") {
+                const accountId = entry.accountId === "auto" ? undefined : entry.accountId
+                setRequestLogContext({ model: entry.modelId, provider: "antigravity", account: entry.accountId })
+                return await createChatCompletionWithOptions({ ...request, model: entry.modelId }, {
+                    accountId,
+                    allowRotation: accountId ? false : true,
+                })
+            }
 
-        // 重试第一个 entry
-        const entry = entries[0]
-        if (entry.provider === "antigravity") {
-            const accountId = entry.accountId === "auto" ? undefined : entry.accountId
-            setRequestLogContext({ model: entry.modelId, provider: "antigravity", account: entry.accountId })
-            return await createChatCompletionWithOptions({ ...request, model: entry.modelId }, {
-                accountId,
-                allowRotation: accountId ? false : true,
-            })
+            const account = authStore.getAccount(entry.provider, entry.accountId)
+            if (!account) {
+                throw new Error("Account not found")
+            }
+            const accountDisplay = account.login || account.email || entry.accountId
+            setRequestLogContext({ model: entry.modelId, provider: entry.provider, account: accountDisplay })
+
+            if (entry.provider === "codex") {
+                const startTime = Date.now()
+                const result = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+                recordProviderUsage(entry.modelId, result)
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+                return result
+            }
+
+            if (entry.provider === "copilot") {
+                const startTime = Date.now()
+                const result = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+                recordProviderUsage(entry.modelId, result)
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+                return result
+            }
+        } catch (error) {
+            lastError = error as Error
+            throw error
         }
     }
 
@@ -359,6 +570,7 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 }
                 const isLimited = accountManager.isAccountRateLimited(entry.accountId) || isRouterRateLimited("antigravity", entry.accountId)
                 if (isLimited) continue
+                if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
                 const accountDisplay = getAccountDisplay("antigravity", entry.accountId)
                 setRequestLogContext({ model: request.model, provider: "antigravity", account: accountDisplay })
                 return await createChatCompletionWithOptions({ ...request, model: request.model }, {
@@ -381,6 +593,7 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
             if (entry.provider === "codex") {
                 const startTime = Date.now()
                 const result = await createCodexCompletion(account, request.model, request.messages, request.tools, request.maxTokens)
+                recordProviderUsage(request.model, result)
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
                 console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
                 return result
@@ -389,6 +602,7 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
             if (entry.provider === "copilot") {
                 const startTime = Date.now()
                 const result = await createCopilotCompletion(account, request.model, request.messages, request.tools, request.maxTokens)
+                recordProviderUsage(request.model, result)
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
                 console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
                 return result
@@ -435,68 +649,87 @@ export async function createRoutedCompletion(request: RoutedRequest) {
         return createAccountCompletionWithEntries(request, accountEntries)
     }
 
-    const flowEntries = resolveFlowEntries(config, request.model)
-    return createFlowCompletionWithEntries(request, flowEntries)
+    const flowSelection = resolveFlowSelection(config, request.model)
+    return createFlowCompletionWithEntries(request, flowSelection.entries, flowSelection.flowKey)
 }
 
-async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, entries: RoutingEntry[]): AsyncGenerator<string, void, unknown> {
+async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, entries: RoutingEntry[], flowKey?: string): AsyncGenerator<string, void, unknown> {
     let lastError: Error | null = null
+    let probedHead = false
+    const flowState = flowKey ? getFlowStickyState(flowKey, entries.length) : null
+    const startIndex = flowState?.cursor ?? 0
 
-    for (const entry of entries) {
-        try {
-            if (entry.provider === "antigravity") {
-                const accountId = entry.accountId === "auto" ? undefined : entry.accountId
-                // Skip rate-limited antigravity accounts (check both accountManager and router-level)
-                if (accountId && entries.length > 1) {
-                    const isLimited = accountManager.isAccountRateLimited(accountId) || isRouterRateLimited("antigravity", accountId)
-                    if (isLimited) continue
-                }
-                yield* createChatCompletionStreamWithOptions({ ...request, model: entry.modelId }, {
-                    accountId,
-                    allowRotation: accountId ? false : true,
-                })
-                return
-            }
+    async function* streamEntry(entry: RoutingEntry): AsyncGenerator<string, void, unknown> {
+        if (entry.provider === "antigravity") {
+            const accountId = entry.accountId === "auto" ? undefined : entry.accountId
+            yield* createChatCompletionStreamWithOptions({ ...request, model: entry.modelId }, {
+                accountId,
+                allowRotation: accountId ? false : true,
+            })
+            return
+        }
 
-            if (authStore.isRateLimited(entry.provider, entry.accountId) && entries.length > 1) {
-                continue
-            }
+        const account = authStore.getAccount(entry.provider, entry.accountId)
+        if (!account) {
+            throw new Error("Account not found")
+        }
+        const accountDisplay = account.login || account.email || entry.accountId
 
-            const account = authStore.getAccount(entry.provider, entry.accountId)
-            if (!account) {
-                continue
-            }
+        let completion
+        let startTime = 0
+        if (entry.provider === "codex") {
+            startTime = Date.now()
+            completion = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+        } else if (entry.provider === "copilot") {
+            startTime = Date.now()
+            completion = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+        }
 
-            let completion
-            if (entry.provider === "codex") {
-                completion = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
-            } else if (entry.provider === "copilot") {
-                completion = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
-            }
+        if (!completion) {
+            throw new Error("Empty completion")
+        }
 
-            if (!completion) {
-                throw new Error("Empty completion")
-            }
-
-            yield buildMessageStart(request.model)
-            let blockIndex = 0
-            for (const block of completion.contentBlocks) {
-                if (block.type === "tool_use") {
-                    yield buildContentBlockStart(blockIndex, "tool_use", { id: block.id!, name: block.name! })
-                    const inputText = JSON.stringify(block.input || {})
-                    yield buildInputJsonDelta(blockIndex, inputText)
-                    yield buildContentBlockStop(blockIndex)
-                    blockIndex++
-                    continue
-                }
-
-                yield buildContentBlockStart(blockIndex, "text")
-                yield buildTextDelta(blockIndex, block.text || "")
+        yield buildMessageStart(request.model)
+        let blockIndex = 0
+        for (const block of completion.contentBlocks) {
+            if (block.type === "tool_use") {
+                yield buildContentBlockStart(blockIndex, "tool_use", { id: block.id!, name: block.name! })
+                const inputText = JSON.stringify(block.input || {})
+                yield buildInputJsonDelta(blockIndex, inputText)
                 yield buildContentBlockStop(blockIndex)
                 blockIndex++
+                continue
             }
-            yield buildMessageDelta(completion.stopReason || "end_turn", completion.usage)
-            yield buildMessageStop()
+
+            yield buildContentBlockStart(blockIndex, "text")
+            yield buildTextDelta(blockIndex, block.text || "")
+            yield buildContentBlockStop(blockIndex)
+            blockIndex++
+        }
+        yield buildMessageDelta(completion.stopReason || "end_turn", completion.usage)
+        yield buildMessageStop()
+
+        recordProviderUsage(entry.modelId, completion)
+
+        if (entry.provider === "codex") {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+        } else if (entry.provider === "copilot") {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+        }
+    }
+
+    for (let index = startIndex; index < entries.length; index++) {
+        const entry = entries[index]
+        if (shouldSkipFlowEntry(entry, entries.length)) {
+            continue
+        }
+        try {
+            yield* streamEntry(entry)
+            if (flowState) {
+                flowState.cursor = index
+            }
             return
         } catch (error) {
             lastError = error as Error
@@ -504,13 +737,46 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
                 continue
             }
             if (error instanceof UpstreamError && shouldFallbackOnUpstream(error)) {
-                // 🆕 修复：标记 rate-limited（同时更新 accountManager 和 router 级别状态）
-                if (entry.provider === "antigravity" && entry.accountId !== "auto") {
-                    accountManager.markRateLimitedFromError(entry.accountId, error.status, error.body)
-                    markRouterRateLimited("antigravity", entry.accountId, 60000)  // 🆕 Router 级别也标记
-                } else if (entry.provider !== "antigravity") {
-                    authStore.markRateLimited(entry.provider, entry.accountId, error.status, error.body, error.retryAfter)
-                    markRouterRateLimited(entry.provider, entry.accountId, 60000)  // 🆕 Router 级别也标记
+                applyFlowRateLimit(entry, error, request.model)
+                if (flowState && index === startIndex) {
+                    advanceFlowCursor(flowState, entries, startIndex)
+                }
+
+                if (
+                    flowState &&
+                    index === startIndex &&
+                    flowState.cursor === startIndex &&
+                    !probedHead &&
+                    entries.length > 1 &&
+                    (isQuotaExhausted(error) || shouldProbeFlowHead(flowState, error))
+                ) {
+                    const probeIndex = 0
+                    if (probeIndex !== index) {
+                        const probeEntry = entries[probeIndex]
+                        if (!shouldSkipFlowEntry(probeEntry, entries.length, { ignoreRateLimit: true })) {
+                            probedHead = true
+                            try {
+                                yield* streamEntry(probeEntry)
+                                flowState.cursor = probeIndex
+                                return
+                            } catch (probeError) {
+                                lastError = probeError as Error
+                                if (probeError instanceof UpstreamError && shouldFallbackOnUpstream(probeError)) {
+                                    applyFlowRateLimit(probeEntry, probeError, request.model)
+                                } else if (isTransientTransportError(probeError)) {
+                                    if (probeEntry.provider !== "antigravity") {
+                                        authStore.markRateLimited(probeEntry.provider, probeEntry.accountId, 500, (probeError as Error).message)
+                                    }
+                                } else {
+                                    throw probeError
+                                }
+                            }
+                        }
+                    }
+
+                    if (index < entries.length - 1) {
+                        flowState.cursor = index + 1
+                    }
                 }
                 continue
             }
@@ -524,17 +790,9 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
         }
     }
 
-    // 🆕 如果所有 entries 都被跳过（rate-limited），清除状态并重试第一个
     if (!lastError && entries.length > 0) {
-        // 清除 router 级别的 rate-limit 状态
-        for (const entry of entries) {
-            routerRateLimits.delete(getRouterRateLimitKey(entry.provider, entry.accountId))
-        }
-        // 清除 accountManager 的 rate-limit 状态
-        accountManager.clearAllRateLimits()
-
-        // 重试第一个 entry
-        const entry = entries[0]
+        const fallbackIndex = flowState?.cursor ?? 0
+        const entry = entries[fallbackIndex]
         if (entry.provider === "antigravity") {
             const accountId = entry.accountId === "auto" ? undefined : entry.accountId
             yield* createChatCompletionStreamWithOptions({ ...request, model: entry.modelId }, {
@@ -543,6 +801,57 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
             })
             return
         }
+
+        const account = authStore.getAccount(entry.provider, entry.accountId)
+        if (!account) {
+            throw new Error("Account not found")
+        }
+        const accountDisplay = account.login || account.email || entry.accountId
+
+        let completion
+        let startTime = 0
+        if (entry.provider === "codex") {
+            startTime = Date.now()
+            completion = await createCodexCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+        } else if (entry.provider === "copilot") {
+            startTime = Date.now()
+            completion = await createCopilotCompletion(account, entry.modelId, request.messages, request.tools, request.maxTokens)
+        }
+
+        if (!completion) {
+            throw new Error("Empty completion")
+        }
+
+        yield buildMessageStart(request.model)
+        let blockIndex = 0
+        for (const block of completion.contentBlocks) {
+            if (block.type === "tool_use") {
+                yield buildContentBlockStart(blockIndex, "tool_use", { id: block.id!, name: block.name! })
+                const inputText = JSON.stringify(block.input || {})
+                yield buildInputJsonDelta(blockIndex, inputText)
+                yield buildContentBlockStop(blockIndex)
+                blockIndex++
+                continue
+            }
+
+            yield buildContentBlockStart(blockIndex, "text")
+            yield buildTextDelta(blockIndex, block.text || "")
+            yield buildContentBlockStop(blockIndex)
+            blockIndex++
+        }
+        yield buildMessageDelta(completion.stopReason || "end_turn", completion.usage)
+        yield buildMessageStop()
+
+        recordProviderUsage(entry.modelId, completion)
+
+        if (entry.provider === "codex") {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+        } else if (entry.provider === "copilot") {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+        }
+        return
     }
 
     if (lastError) {
@@ -563,6 +872,7 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
                 }
                 const isLimited = accountManager.isAccountRateLimited(entry.accountId) || isRouterRateLimited("antigravity", entry.accountId)
                 if (isLimited) continue
+                if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
                 yield* createChatCompletionStreamWithOptions({ ...request, model: request.model }, {
                     accountId: entry.accountId,
                     allowRotation: false,
@@ -578,11 +888,15 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
             if (!account) {
                 continue
             }
+            const accountDisplay = account.login || account.email || entry.accountId
 
             let completion
+            let startTime = 0
             if (entry.provider === "codex") {
+                startTime = Date.now()
                 completion = await createCodexCompletion(account, request.model, request.messages, request.tools, request.maxTokens)
             } else if (entry.provider === "copilot") {
+                startTime = Date.now()
                 completion = await createCopilotCompletion(account, request.model, request.messages, request.tools, request.maxTokens)
             }
 
@@ -609,6 +923,16 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
             }
             yield buildMessageDelta(completion.stopReason || "end_turn", completion.usage)
             yield buildMessageStop()
+
+            recordProviderUsage(request.model, completion)
+
+            if (entry.provider === "codex") {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+            } else if (entry.provider === "copilot") {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+            }
             return
         } catch (error) {
             lastError = error as Error
@@ -654,6 +978,6 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
         return
     }
 
-    const flowEntries = resolveFlowEntries(config, request.model)
-    yield* createFlowCompletionStreamWithEntries(request, flowEntries)
+    const flowSelection = resolveFlowSelection(config, request.model)
+    yield* createFlowCompletionStreamWithEntries(request, flowSelection.entries, flowSelection.flowKey)
 }

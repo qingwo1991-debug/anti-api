@@ -33,14 +33,14 @@ export async function getLanguageServerInfo(): Promise<LanguageServerInfo | null
         )
 
         if (!psOutput.trim()) {
-            consola.warn("未找到运行中的 language_server 进程")
+            consola.warn("No running language_server process found")
             return null
         }
 
         // 解析 PID
         const pidMatch = psOutput.match(/^\S+\s+(\d+)/)
         if (!pidMatch) {
-            consola.warn("无法解析 language_server PID")
+            consola.warn("Failed to parse language_server PID")
             return null
         }
         const pid = parseInt(pidMatch[1], 10)
@@ -51,7 +51,7 @@ export async function getLanguageServerInfo(): Promise<LanguageServerInfo | null
         const workspaceMatch = psOutput.match(/--workspace_id\s+(\S+)/)
 
         if (!extensionPortMatch || !csrfMatch) {
-            consola.warn("无法解析 language_server 参数")
+            consola.warn("Failed to parse language_server arguments")
             return null
         }
 
@@ -93,7 +93,7 @@ export async function getLanguageServerInfo(): Promise<LanguageServerInfo | null
         return info
 
     } catch (error) {
-        consola.error("获取 language_server 信息失败:", error)
+        consola.error("Failed to get language_server info:", error)
         return null
     }
 }
@@ -176,7 +176,7 @@ export async function findLanguageServerForWorkspace(
         return await getLanguageServerInfo()
 
     } catch (error) {
-        consola.error("查找 language_server 失败:", error)
+        consola.error("Failed to find language_server:", error)
         return null
     }
 }

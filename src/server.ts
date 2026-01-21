@@ -20,6 +20,8 @@ import { accountManager } from "./services/antigravity/account-manager"
 import { loadRoutingConfig } from "./services/routing/config"
 import { importCodexAuthSources } from "./services/codex/oauth"
 import { loadSettings, saveSettings } from "./services/settings"
+import { pingAccount } from "./services/ping"
+import { summarizeUpstreamError, UpstreamError } from "./lib/error"
 
 import { getRequestLogContext } from "./lib/logger"
 
@@ -192,6 +194,58 @@ server.get("/quota/json", async (c) => {
         return c.json(snapshot)
     } catch (error) {
         return c.json({ error: "Failed to fetch quota" }, 500)
+    }
+})
+
+// Ping model availability for a specific account
+server.post("/accounts/ping", async (c) => {
+    let body: { provider?: string; accountId?: string; modelId?: string } = {}
+    try {
+        body = await c.req.json()
+    } catch {
+        body = {}
+    }
+
+    const provider = (body.provider || "").toLowerCase()
+    const accountId = body.accountId || ""
+    const modelId = body.modelId
+
+    if (!provider || !accountId) {
+        return c.json({ success: false, error: "provider and accountId are required" }, 400)
+    }
+    if (!["antigravity", "codex", "copilot"].includes(provider)) {
+        return c.json({ success: false, error: "Unsupported provider" }, 400)
+    }
+
+    try {
+        const result = await pingAccount(provider as any, accountId, modelId)
+        return c.json({
+            success: true,
+            provider,
+            accountId,
+            modelId: result.modelId,
+            latencyMs: result.latencyMs,
+        })
+    } catch (error) {
+        if (error instanceof UpstreamError) {
+            const summary = summarizeUpstreamError(error)
+            return c.json({
+                success: false,
+                provider,
+                accountId,
+                modelId: modelId || null,
+                status: error.status,
+                reason: summary.reason || null,
+                error: summary.message,
+            })
+        }
+        return c.json({
+            success: false,
+            provider,
+            accountId,
+            modelId: modelId || null,
+            error: (error as Error).message,
+        })
     }
 })
 

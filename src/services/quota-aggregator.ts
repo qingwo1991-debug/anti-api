@@ -1,5 +1,8 @@
 import consola from "consola"
 import https from "https"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
+import { join } from "path"
+import { homedir } from "os"
 import { authStore } from "~/services/auth/store"
 import { refreshAccessToken } from "~/services/antigravity/oauth"
 import { fetchAntigravityModels as fetchAntigravityModelsRequest, type AntigravityModelInfo } from "~/services/antigravity/quota-fetch"
@@ -24,10 +27,64 @@ export type AccountQuotaView = {
     bars: AccountBar[]
 }
 
+type QuotaCacheEntry = {
+    provider: "antigravity" | "codex" | "copilot"
+    accountId: string
+    displayName: string
+    bars: AccountBar[]
+    updatedAt: string
+}
+
+const QUOTA_CACHE_DIR = join(homedir(), ".anti-api")
+const QUOTA_CACHE_FILE = join(QUOTA_CACHE_DIR, "quota-cache.json")
+let quotaCache = new Map<string, QuotaCacheEntry>()
+let cacheLoaded = false
+
+function getCacheKey(provider: QuotaCacheEntry["provider"], accountId: string): string {
+    return `${provider}:${accountId}`
+}
+
+function loadQuotaCache(): void {
+    if (cacheLoaded) return
+    cacheLoaded = true
+    try {
+        if (!existsSync(QUOTA_CACHE_FILE)) return
+        const raw = JSON.parse(readFileSync(QUOTA_CACHE_FILE, "utf-8")) as Record<string, QuotaCacheEntry>
+        quotaCache = new Map(Object.entries(raw))
+    } catch {
+        quotaCache = new Map()
+    }
+}
+
+function saveQuotaCache(): void {
+    try {
+        if (!existsSync(QUOTA_CACHE_DIR)) {
+            mkdirSync(QUOTA_CACHE_DIR, { recursive: true })
+        }
+        const payload: Record<string, QuotaCacheEntry> = {}
+        for (const [key, value] of quotaCache.entries()) {
+            payload[key] = value
+        }
+        writeFileSync(QUOTA_CACHE_FILE, JSON.stringify(payload, null, 2))
+    } catch {
+        // Best-effort cache only
+    }
+}
+
+function updateQuotaCache(entry: QuotaCacheEntry): void {
+    quotaCache.set(getCacheKey(entry.provider, entry.accountId), entry)
+}
+
+function getCachedBars(provider: QuotaCacheEntry["provider"], accountId: string): AccountBar[] | null {
+    const cached = quotaCache.get(getCacheKey(provider, accountId))
+    return cached?.bars || null
+}
+
 export async function getAggregatedQuota(): Promise<{
     timestamp: string
     accounts: AccountQuotaView[]
 }> {
+    loadQuotaCache()
     accountManager.load()
 
     const antigravityAccounts = authStore.listAccounts("antigravity")
@@ -39,6 +96,7 @@ export async function getAggregatedQuota(): Promise<{
         fetchCodexQuotas(codexAccounts),
         fetchCopilotQuotas(copilotAccounts),
     ])
+    saveQuotaCache()
 
     return {
         timestamp: new Date().toISOString(),
@@ -57,6 +115,13 @@ async function fetchAntigravityQuotas(accounts: ProviderAccount[]): Promise<Acco
                 const refreshed = await refreshAntigravityToken(account)
                 const quotaModels = await fetchAntigravityModelsForAccount(refreshed)
                 const bars = buildAntigravityBars(quotaModels)
+                updateQuotaCache({
+                    provider: "antigravity",
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars,
+                    updatedAt: new Date().toISOString(),
+                })
                 return {
                     provider: "antigravity" as const,
                     accountId: account.id,
@@ -75,6 +140,15 @@ async function fetchAntigravityQuotas(accounts: ProviderAccount[]): Promise<Acco
         if (lastError) {
             if (!isCertificateError(lastError) && !isAuthError(lastError)) {
                 consola.warn("Antigravity quota fetch failed:", lastError)
+            }
+        }
+        const cachedBars = getCachedBars("antigravity", account.id)
+        if (cachedBars) {
+            return {
+                provider: "antigravity" as const,
+                accountId: account.id,
+                displayName: account.email || account.id,
+                bars: cachedBars,
             }
         }
         return {
@@ -204,6 +278,13 @@ async function fetchCodexQuotas(accounts: ProviderAccount[]): Promise<AccountQuo
         try {
             const updated = await refreshCodexIfNeeded(account)
             const quota = await fetchCodexUsage(updated)
+            updateQuotaCache({
+                provider: "codex",
+                accountId: account.id,
+                displayName: account.email || account.id,
+                bars: quota,
+                updatedAt: new Date().toISOString(),
+            })
             return {
                 provider: "codex" as const,
                 accountId: account.id,
@@ -213,6 +294,15 @@ async function fetchCodexQuotas(accounts: ProviderAccount[]): Promise<AccountQuo
         } catch (error) {
             if (!isCertificateError(error)) {
                 consola.warn("Codex quota fetch failed:", error)
+            }
+            const cachedBars = getCachedBars("codex", account.id)
+            if (cachedBars) {
+                return {
+                    provider: "codex" as const,
+                    accountId: account.id,
+                    displayName: account.email || account.id,
+                    bars: cachedBars,
+                }
             }
             return {
                 provider: "codex" as const,
@@ -281,6 +371,13 @@ async function fetchCopilotQuotas(accounts: ProviderAccount[]): Promise<AccountQ
     const promises = accounts.map(async (account) => {
         try {
             const bar = await fetchCopilotPremium(account)
+            updateQuotaCache({
+                provider: "copilot",
+                accountId: account.id,
+                displayName: account.login || account.id,
+                bars: [bar],
+                updatedAt: new Date().toISOString(),
+            })
             return {
                 provider: "copilot" as const,
                 accountId: account.id,
@@ -289,6 +386,15 @@ async function fetchCopilotQuotas(accounts: ProviderAccount[]): Promise<AccountQ
             }
         } catch (error) {
             consola.warn("Copilot quota fetch failed:", error)
+            const cachedBars = getCachedBars("copilot", account.id)
+            if (cachedBars) {
+                return {
+                    provider: "copilot" as const,
+                    accountId: account.id,
+                    displayName: account.login || account.id,
+                    bars: cachedBars,
+                }
+            }
             return {
                 provider: "copilot" as const,
                 accountId: account.id,

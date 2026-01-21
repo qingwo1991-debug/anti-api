@@ -73,11 +73,11 @@ const start = defineCommand({
 
         // 如果没有 OAuth 认证，尝试从本地 IDE 读取 token（作为 fallback）
         if (!state.accessToken) {
-            consola.info("未找到 OAuth 认证，尝试从本地 Antigravity IDE 读取...")
+            consola.info("OAuth auth not found, trying to load from local Antigravity IDE...")
             try {
                 await setupAntigravityToken()
             } catch (error) {
-                consola.debug("无法从 IDE 读取 token:", (error as Error).message)
+                consola.debug("Failed to read token from IDE:", (error as Error).message)
             }
         }
 
@@ -142,14 +142,14 @@ const addAccount = defineCommand({
         description: "添加额外的 Google 账号用于配额轮换",
     },
     async run() {
-        consola.info("正在添加新账号...")
-        consola.info("提示: 添加多个账号可以在配额耗尽时自动轮换，避免 429 错误")
+        consola.info("Adding a new account...")
+        consola.info("Tip: Add multiple accounts to rotate when quota is exhausted and avoid 429 errors")
 
         // 加载现有账号
         accountManager.load()
         const existingEmails = accountManager.getEmails()
         if (existingEmails.length > 0) {
-            consola.info(`当前已有 ${existingEmails.length} 个账号:`)
+            consola.info(`Existing accounts (${existingEmails.length}):`)
             existingEmails.forEach((email, i) => consola.info(`  ${i + 1}. ${email}`))
         }
 
@@ -166,10 +166,10 @@ const addAccount = defineCommand({
                 projectId: state.cloudaicompanionProject,
             })
 
-            consola.success(`账号添加成功: ${result.email}`)
-            consola.info(`现在共有 ${accountManager.count()} 个账号可用于轮换`)
+            consola.success(`Account added: ${result.email}`)
+            consola.info(`Now ${accountManager.count()} accounts available for rotation`)
         } else {
-            consola.error(`添加账号失败: ${result.error}`)
+            consola.error(`Failed to add account: ${result.error}`)
         }
     },
 })
@@ -185,12 +185,12 @@ const listAccounts = defineCommand({
         const emails = accountManager.getEmails()
 
         if (emails.length === 0) {
-            consola.info("暂无已添加的账号")
-            consola.info("使用 'bun run src/main.ts add-account' 添加账号")
+            consola.info("No accounts added yet")
+            consola.info("Use 'bun run src/main.ts add-account' to add an account")
             return
         }
 
-        consola.info(`共有 ${emails.length} 个账号:`)
+        consola.info(`Accounts (${emails.length}):`)
         emails.forEach((email, i) => {
             consola.info(`  ${i + 1}. ${email}`)
         })
@@ -242,10 +242,10 @@ const remote = defineCommand({
             idleTimeout: 120,
         })
 
-        consola.success(`Anti-API 本地服务已启动: http://localhost:${state.port}`)
+        consola.success(`Anti-API local server started: http://localhost:${state.port}`)
 
         // 使用 ngrok 创建隧道
-        consola.info("正在创建 ngrok 隧道...")
+        consola.info("Creating ngrok tunnel...")
 
         const ngrok = spawn("ngrok", ["http", state.port.toString(), "--log", "stdout"], {
             stdio: ["ignore", "pipe", "pipe"]
@@ -266,7 +266,7 @@ const remote = defineCommand({
             } catch (e) {
                 // 继续重试
             }
-            consola.info(`等待 ngrok 启动... (${i + 1}/10)`)
+            consola.info(`Waiting for ngrok... (${i + 1}/10)`)
         }
 
         if (tunnelUrl) {
@@ -287,23 +287,23 @@ API 端点: ${tunnelUrl}/v1/messages
                 }
             })
         } else {
-            consola.error("ngrok 启动失败，请检查配置")
+            consola.error("ngrok failed to start, check configuration")
             process.exit(1)
         }
 
         ngrok.on("close", (code: number) => {
-            consola.warn("ngrok 已关闭，退出码:", code)
+            consola.warn("ngrok closed, exit code:", code)
             process.exit(0)
         })
 
         ngrok.on("error", (err: Error) => {
-            consola.error("ngrok 启动失败:", err.message)
+            consola.error("ngrok failed to start:", err.message)
             process.exit(1)
         })
 
         // 保持进程运行
         process.on("SIGINT", () => {
-            consola.info("正在关闭...")
+            consola.info("Shutting down...")
             ngrok.kill()
             process.exit(0)
         })

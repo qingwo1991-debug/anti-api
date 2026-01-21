@@ -8,7 +8,6 @@ import { getAccessToken } from "./oauth"
 import { accountManager } from "./account-manager"
 import { state } from "~/lib/state"
 import { type ClaudeMessage, type ClaudeTool } from "~/lib/translator"
-import { rateLimiter } from "~/lib/rate-limiter"
 import { determineRetryStrategy, applyRetryDelay } from "~/lib/retry"
 import { UpstreamError } from "~/lib/error"
 import { cleanJsonSchemaForGemini } from "~/lib/json-schema-cleaner"
@@ -25,6 +24,9 @@ const STREAM_ENDPOINT = "/v1internal:streamGenerateContent"
 const DEFAULT_USER_AGENT = "antigravity/1.11.9 windows/amd64"
 const MAX_RETRY_ATTEMPTS = 1  // v2.0.1 恢复：简化重试，避免级联 429
 const MAX_WAIT_BEFORE_SWITCH_MS = 5000  // 最多等待5秒再切换账号
+const MAX_NON_QUOTA_429_RETRIES = 2  // 非配额 429 的重试次数（不切换账号）
+const MAX_NON_QUOTA_429_WAIT_MS = 10000  // 非配额 429 最大等待时间
+const FETCH_TIMEOUT_MS = 30000  // 防止上游请求长期卡住
 
 /**
  * 从 429 错误中解析重试延迟时间（毫秒）
@@ -76,6 +78,35 @@ function parseRetryDelay(errorText: string, retryAfterHeader?: string): number |
     return null
 }
 
+function isQuotaExhaustedErrorText(errorText: string): boolean {
+    const body = (errorText || "").trim()
+    if (!body) return false
+
+    if (body.startsWith("{") || body.startsWith("[")) {
+        try {
+            const json = JSON.parse(body)
+            const details = json?.error?.details
+            if (Array.isArray(details)) {
+                for (const detail of details) {
+                    if (detail?.reason === "QUOTA_EXHAUSTED") return true
+                }
+            }
+            const message = json?.error?.message
+            if (typeof message === "string") {
+                const lower = message.toLowerCase()
+                if (lower.includes("quota") && lower.includes("reset")) return true
+            }
+        } catch {
+            // ignore parse errors
+        }
+    }
+
+    const lower = body.toLowerCase()
+    if (lower.includes("quota_exhausted")) return true
+    if (lower.includes("quota") && lower.includes("reset")) return true
+    return false
+}
+
 /**
  * 解析时长字符串，如 "42s", "2m30s", "1h30m", "500ms"
  */
@@ -93,6 +124,23 @@ function parseDurationString(s: string): number | null {
     const totalMs = (hours * 3600 + minutes * 60 + Math.ceil(seconds)) * 1000 + ms
 
     return totalMs > 0 ? totalMs : null
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+    if (options.signal) {
+        if (options.signal.aborted) {
+            controller.abort()
+        } else {
+            options.signal.addEventListener("abort", () => controller.abort(), { once: true })
+        }
+    }
+    try {
+        return await fetch(url, { ...options, signal: controller.signal })
+    } finally {
+        clearTimeout(timeoutId)
+    }
 }
 
 const MODEL_MAPPING: Record<string, string> = {
@@ -114,6 +162,10 @@ export interface ChatRequest {
     model: string
     messages: ClaudeMessage[]
     tools?: ClaudeTool[]
+    toolChoice?: {
+        type: "auto" | "any" | "tool" | "none"
+        name?: string
+    }
     maxTokens?: number
 }
 
@@ -333,7 +385,33 @@ You are pair programming with a USER to solve their coding task. The task may re
     }
 }
 
-function claudeToAntigravity(model: string, messages: ClaudeMessage[], tools?: ClaudeTool[]): any {
+function buildFunctionCallingConfig(toolChoice?: ChatRequest["toolChoice"]): any {
+    if (!toolChoice) {
+        return { mode: "VALIDATED" }
+    }
+
+    switch (toolChoice.type) {
+        case "none":
+            return { mode: "NONE" }
+        case "any":
+            return { mode: "ANY" }
+        case "tool":
+            return {
+                mode: "ANY",
+                ...(toolChoice.name ? { allowedFunctionNames: [toolChoice.name] } : {})
+            }
+        case "auto":
+        default:
+            return { mode: "VALIDATED" }
+    }
+}
+
+function claudeToAntigravity(
+    model: string,
+    messages: ClaudeMessage[],
+    tools?: ClaudeTool[],
+    toolChoice?: ChatRequest["toolChoice"]
+): any {
     const toolIdToName = new Map<string, string>()
     const contents = messages.map((msg) => ({
         role: msg.role === "assistant" ? "model" : msg.role,
@@ -355,7 +433,7 @@ function claudeToAntigravity(model: string, messages: ClaudeMessage[], tools?: C
     }
 
     if (model.includes("claude")) {
-        innerRequest.toolConfig = { functionCallingConfig: { mode: "VALIDATED" } }
+        innerRequest.toolConfig = { functionCallingConfig: buildFunctionCallingConfig(toolChoice) }
     }
 
     if (tools && tools.length > 0 && model.includes("claude")) {
@@ -443,12 +521,13 @@ async function sendRequestSse(
     let currentAccessToken = accessToken
     let currentAccountId = accountId
 
-    for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+    const maxAttempts = Math.max(MAX_RETRY_ATTEMPTS, MAX_NON_QUOTA_429_RETRIES + 1)
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
         // 锁已在 handler.ts HTTP 层获取，这里不需要
         for (const baseUrl of ANTIGRAVITY_BASE_URLS) {
             const url = baseUrl + endpoint + "?alt=sse"
             try {
-                const response = await fetch(url, {
+                const response = await fetchWithTimeout(url, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -457,7 +536,7 @@ async function sendRequestSse(
                         "Accept": "text/event-stream",
                     },
                     body: JSON.stringify(antigravityRequest),
-                })
+                }, FETCH_TIMEOUT_MS)
 
                 if (response.ok) {
                     if (currentAccountId) accountManager.markSuccess(currentAccountId)
@@ -477,19 +556,21 @@ async function sendRequestSse(
                 consola.warn("SSE error " + response.status, lastErrorText.substring(0, 200))
 
                 if (lastStatusCode === 429 && currentAccountId) {
+                    const quotaExhausted = isQuotaExhaustedErrorText(lastErrorText)
                     // 🆕 解析等待时间，如果无法解析则使用默认 2 秒
                     const parsedDelay = parseRetryDelay(lastErrorText, lastRetryAfterHeader)
                     const retryDelayMs = parsedDelay ?? 2000  // 默认 2 秒
+                    const boundedDelayMs = Math.min(retryDelayMs, MAX_NON_QUOTA_429_WAIT_MS)
 
-                    // 🆕 如果等待时间短（<= 5s）且还有重试次数，等待后重试同一账号
-                    if (retryDelayMs <= MAX_WAIT_BEFORE_SWITCH_MS && attempt < MAX_RETRY_ATTEMPTS - 1) {
+                    // 🆕 非配额 429：始终重试同一账号，不切换
+                    if (!quotaExhausted && attempt < maxAttempts - 1) {
                         // 🆕 关键修复：在等待期间临时标记账号为限流，防止其他并发请求选择它
                         const account = await accountManager.getAccountById(currentAccountId)
                         if (account) {
-                            (account as any).rateLimitedUntil = Date.now() + retryDelayMs + 500
+                            (account as any).rateLimitedUntil = Date.now() + boundedDelayMs + 500
                         }
 
-                        await new Promise(resolve => setTimeout(resolve, retryDelayMs + 200)) // 加 200ms 缓冲
+                        await new Promise(resolve => setTimeout(resolve, boundedDelayMs + 200)) // 加 200ms 缓冲
 
                         // 🆕 等待结束后清除临时限流标记
                         if (account) {
@@ -500,29 +581,32 @@ async function sendRequestSse(
                         break // 跳出 endpoint 循环，进入下一轮 attempt
                     }
 
-                    // 等待时间太长或无法解析，标记限流并尝试切换账号
-                    accountManager.markRateLimitedFromError(
-                        currentAccountId,
-                        lastStatusCode,
-                        lastErrorText,
-                        lastRetryAfterHeader
-                    )
+                    // 仅在配额耗尽时才切换账号
+                    if (quotaExhausted) {
+                        const limitResult = await accountManager.markRateLimitedFromError(
+                            currentAccountId,
+                            lastStatusCode,
+                            lastErrorText,
+                            lastRetryAfterHeader
+                        )
 
-                    // 粘性策略：将失败的账户移到队尾
-                    accountManager.moveToEndOfQueue(currentAccountId)
+                        if (limitResult?.reason === "quota_exhausted") {
+                            accountManager.moveToEndOfQueue(currentAccountId)
+                        }
 
-                    if (allowRotation && accountManager.count() > 1) {
-                        const next = await accountManager.getNextAvailableAccount(true)
-                        if (next && next.accountId !== currentAccountId) {
-                            currentAccessToken = next.accessToken
-                            currentAccountId = next.accountId
-                            antigravityRequest.project = next.projectId
-                            // Break out of endpoint loop to retry with new account
-                            lastError = new Error("429 - switched account")
-                            break
+                        if (allowRotation && accountManager.count() > 1) {
+                            const next = await accountManager.getNextAvailableAccount(true)
+                            if (next && next.accountId !== currentAccountId) {
+                                currentAccessToken = next.accessToken
+                                currentAccountId = next.accountId
+                                antigravityRequest.project = next.projectId
+                                // Break out of endpoint loop to retry with new account
+                                lastError = new Error("429 - switched account")
+                                break
+                            }
                         }
                     }
-                    // 无法切换账号，抛出错误让 router 处理
+                    // 非配额 429 不切换账号，直接抛出
                     throw new UpstreamError("antigravity", 429, lastErrorText, lastRetryAfterHeader)
                 }
 
@@ -601,152 +685,205 @@ async function* sendRequestSseStreaming(
     modelName?: string
 ): AsyncGenerator<string, void, unknown> {
     const startTime = Date.now()
-    const READ_TIMEOUT_MS = 60000  // 每次读取最多等待 60 秒
+    const READ_TIMEOUT_MS = 180000  // 每次读取最多等待 180 秒
+    const IDLE_TIMEOUT_MS = 300000  // 超过 300 秒没有有效 data 则中断
+    let lastError: UpstreamError | null = null
 
-    for (const baseUrl of ANTIGRAVITY_BASE_URLS) {
-        const url = baseUrl + endpoint + "?alt=sse"
+    for (let attempt = 0; attempt <= MAX_NON_QUOTA_429_RETRIES; attempt++) {
+        let retrySameAccount = false
+        for (const baseUrl of ANTIGRAVITY_BASE_URLS) {
+            const url = baseUrl + endpoint + "?alt=sse"
 
-        try {
-            const response = await fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": "Bearer " + accessToken,
-                    "User-Agent": DEFAULT_USER_AGENT,
-                    "Accept": "text/event-stream",
-                },
-                body: JSON.stringify(antigravityRequest),
-            })
-
-            if (!response.ok) {
-                const errorText = await response.text()
-                if (response.status === 429 && accountId) {
-                    accountManager.markRateLimitedFromError(accountId, response.status, errorText)
-                    accountManager.moveToEndOfQueue(accountId)
-                }
-                throw new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
-            }
-
-            if (accountId) accountManager.markSuccess(accountId)
-
-            const reader = response.body?.getReader()
-            if (!reader) {
-                throw new Error("Response body is not readable")
-            }
-
-            const decoder = new TextDecoder()
-            let buffer = ""
             let hasYielded = false
+            let lastYieldAt = Date.now()
 
             try {
-                while (true) {
-                    // 🆕 添加读取超时保护
-                    const readPromise = reader.read()
-                    const timeoutPromise = new Promise<never>((_, reject) => {
-                        setTimeout(() => reject(new Error("Stream read timeout")), READ_TIMEOUT_MS)
-                    })
+                const response = await fetchWithTimeout(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer " + accessToken,
+                        "User-Agent": DEFAULT_USER_AGENT,
+                        "Accept": "text/event-stream",
+                    },
+                    body: JSON.stringify(antigravityRequest),
+                }, FETCH_TIMEOUT_MS)
 
-                    let result: any
-                    try {
-                        result = await Promise.race([readPromise, timeoutPromise])
-                    } catch (readError) {
-                        // 超时或网络错误
-                        consola.warn("[SSE Streaming] Read error:", readError)
+                if (!response.ok) {
+                    const errorText = await response.text()
+                    if (response.status === 429 && accountId) {
+                        const quotaExhausted = isQuotaExhaustedErrorText(errorText)
+                        if (quotaExhausted) {
+                            const limitResult = await accountManager.markRateLimitedFromError(accountId, response.status, errorText)
+                            if (limitResult?.reason === "quota_exhausted") {
+                                accountManager.moveToEndOfQueue(accountId)
+                            }
+                            lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
+                            throw lastError
+                        }
+
+                        const parsedDelay = parseRetryDelay(errorText, response.headers.get("retry-after") || undefined)
+                        const waitMs = Math.min(parsedDelay ?? 2000, MAX_NON_QUOTA_429_WAIT_MS)
+                        await new Promise(resolve => setTimeout(resolve, waitMs))
+                        lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
+                        retrySameAccount = true
                         break
                     }
-
-                    const { done, value } = result
-                    if (done) break
-
-                    buffer += decoder.decode(value, { stream: true })
-
-                    // 按行处理完整的 SSE 事件
-                    const lines = buffer.split("\n")
-                    buffer = lines.pop() || ""  // 保留不完整的最后一行
-
-                    for (const line of lines) {
-                        const trimmed = line.trim()
-                        if (!trimmed.startsWith("data: ")) continue
-
-                        const jsonStr = trimmed.slice(6).trim()
-                        if (!jsonStr || jsonStr === "[DONE]") continue
-
-                        try {
-                            const parsed = JSON.parse(jsonStr)
-                            yield JSON.stringify(parsed)
-                            hasYielded = true
-                        } catch {
-                            // 忽略非 JSON 行
-                        }
+                    if (shouldTryNextEndpoint(response.status)) {
+                        lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
+                        continue
                     }
+                    throw new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                 }
 
-                // 处理缓冲区中剩余的数据
-                if (buffer.trim().startsWith("data: ")) {
-                    const jsonStr = buffer.trim().slice(6).trim()
-                    if (jsonStr && jsonStr !== "[DONE]") {
-                        try {
-                            const parsed = JSON.parse(jsonStr)
-                            yield JSON.stringify(parsed)
-                            hasYielded = true
-                        } catch {
-                            // 忽略
-                        }
-                    }
+                if (accountId) accountManager.markSuccess(accountId)
+
+                const reader = response.body?.getReader()
+                if (!reader) {
+                    throw new Error("Response body is not readable")
                 }
 
-                // 如果没有产出任何数据，抛出错误
-                if (!hasYielded) {
-                    throw new Error("Stream completed without yielding any data")
-                }
+                const decoder = new TextDecoder()
+                let buffer = ""
 
-            } finally {
                 try {
-                    reader.releaseLock()
-                } catch {
-                    // 忽略 releaseLock 错误
+                    while (true) {
+                        // 🆕 添加读取超时保护
+                        const readPromise = reader.read()
+                        const timeoutPromise = new Promise<never>((_, reject) => {
+                            setTimeout(() => reject(new Error("Stream read timeout")), READ_TIMEOUT_MS)
+                        })
+
+                        let result: any
+                        try {
+                            result = await Promise.race([readPromise, timeoutPromise])
+                        } catch (readError) {
+                            // 超时或网络错误
+                            consola.warn("[SSE Streaming] Read error:", readError)
+                            break
+                        }
+
+                        const { done, value } = result
+                        if (done) break
+
+                        buffer += decoder.decode(value, { stream: true })
+
+                        // Parse SSE by event blocks to handle multi-line data payloads
+                        const events = buffer.split(/\r?\n\r?\n/)
+                        buffer = events.pop() || ""  // Keep incomplete tail
+
+                        for (const event of events) {
+                            const data = extractSseEventData(event)
+                            if (!data) continue
+                            lastYieldAt = Date.now()
+
+                            const trimmed = data.trim()
+                            if (!trimmed || trimmed === "[DONE]") continue
+
+                            try {
+                                const parsed = JSON.parse(trimmed)
+                                yield JSON.stringify(parsed)
+                                hasYielded = true
+                            } catch {
+                                // Ignore non-JSON payloads
+                            }
+                        }
+
+                        if (Date.now() - lastYieldAt > IDLE_TIMEOUT_MS) {
+                            throw new Error("Stream idle timeout")
+                        }
+                    }
+
+                    // Handle any leftover event data
+                    const tailData = extractSseEventData(buffer)
+                    if (tailData) {
+                        const trimmed = tailData.trim()
+                        if (trimmed && trimmed !== "[DONE]") {
+                            try {
+                                const parsed = JSON.parse(trimmed)
+                                yield JSON.stringify(parsed)
+                                hasYielded = true
+                            } catch {
+                                // ignore
+                            }
+                        }
+                    }
+
+                    // 如果没有产出任何数据，抛出错误
+                    if (!hasYielded) {
+                        throw new Error("Stream completed without yielding any data")
+                    }
+
+                } finally {
+                    try {
+                        reader.releaseLock()
+                    } catch {
+                        // 忽略 releaseLock 错误
+                    }
                 }
+
+                // 成功完成 - 在 return 之前记录日志
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+                const account = accountId ? await accountManager.getAccountById(accountId) : null
+                const accountPart = account?.email ? ` >> ${account.email}` : (accountId ? ` >> ${accountId}` : "")
+                console.log(`\x1b[32m[${formatLogTime()}] 200: from ${modelName || "unknown"} > Antigravity${accountPart} (${elapsed}s)\x1b[0m`)
+                return
+
+            } catch (error) {
+                if (error instanceof UpstreamError) {
+                    if (hasYielded) {
+                        ;(error as any).streamingStarted = true
+                    }
+                    throw error
+                }
+                if (hasYielded) throw error
+                consola.warn("[SSE Streaming] Error on", baseUrl, error)
+                continue
             }
-
-            // 成功完成 - 在 return 之前记录日志
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-            const account = accountId ? await accountManager.getAccountById(accountId) : null
-            const accountPart = account?.email ? ` >> ${account.email}` : (accountId ? ` >> ${accountId}` : "")
-            console.log(`\x1b[32m[${formatLogTime()}] 200: from ${modelName || "unknown"} > Antigravity${accountPart} (${elapsed}s)\x1b[0m`)
-            return
-
-        } catch (error) {
-            if (error instanceof UpstreamError) throw error
-            consola.warn("[SSE Streaming] Error on", baseUrl, error)
-            continue
+        }
+        if (!retrySameAccount) {
+            break
         }
     }
 
+    if (lastError) {
+        throw lastError
+    }
     throw new Error("All endpoints failed")
 }
 
 function collectSseChunks(rawSse: string): any[] {
     const chunks: any[] = []
 
-    // 🔧 更健壮的解析：按行处理，直接找 data: 开头的行
-    const lines = rawSse.split(/\r?\n/)
-
-    for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith("data: ")) continue
-
-        const jsonStr = trimmed.slice(6).trim()
-        if (!jsonStr || jsonStr === "[DONE]") continue
-
+    // Parse SSE by event blocks to handle multi-line data payloads
+    const events = rawSse.split(/\r?\n\r?\n/)
+    for (const event of events) {
+        const data = extractSseEventData(event)
+        if (!data) continue
+        const trimmed = data.trim()
+        if (!trimmed || trimmed === "[DONE]") continue
         try {
-            const parsed = JSON.parse(jsonStr)
+            const parsed = JSON.parse(trimmed)
             chunks.push(parsed)
         } catch {
-            // 忽略解析失败的行
+            // ignore parse errors
         }
     }
 
     return chunks
+}
+
+function extractSseEventData(event: string): string | null {
+    const dataLines: string[] = []
+    const lines = event.split(/\r?\n/)
+    for (const line of lines) {
+        if (!line.startsWith("data:")) continue
+        let value = line.slice(5)
+        if (value.startsWith(" ")) value = value.slice(1)
+        dataLines.push(value)
+    }
+    if (dataLines.length === 0) return null
+    return dataLines.join("\n")
 }
 
 export async function createChatCompletion(request: ChatRequest): Promise<ChatResponse> {
@@ -761,6 +898,7 @@ export async function createChatCompletionWithOptions(
     let accountId: string | undefined
     let projectId: string | undefined
     let accountEmail: string | undefined
+    let releaseAccountLock: (() => void) | null = null
 
     if (options.accountId) {
         const account = await accountManager.getAccountById(options.accountId)
@@ -788,38 +926,47 @@ export async function createChatCompletionWithOptions(
     // Set log context for request logging
     setRequestLogContext({ model: request.model, provider: "antigravity", account: accountEmail })
 
+    if (accountId) {
+        releaseAccountLock = await accountManager.acquireAccountLock(accountId)
+    }
+
+    try {
     const antigravityRequest = claudeToAntigravity(
         getAntigravityModelName(request.model),
         request.messages,
-        request.tools
+        request.tools,
+        request.toolChoice
     )
 
-    if (projectId) antigravityRequest.project = projectId
+        if (projectId) antigravityRequest.project = projectId
 
-    const rawSse = await sendRequestSse(
-        STREAM_ENDPOINT,
-        antigravityRequest,
-        accessToken,
-        accountId,
-        options.allowRotation ?? true,
-        request.model
-    )
-    const sseChunks = collectSseChunks(rawSse)
-    const rawResponse = sseChunks.length > 0 ? JSON.stringify(sseChunks) : rawSse
+        const rawSse = await sendRequestSse(
+            STREAM_ENDPOINT,
+            antigravityRequest,
+            accessToken,
+            accountId,
+            options.allowRotation ?? true,
+            request.model
+        )
+        const sseChunks = collectSseChunks(rawSse)
+        const rawResponse = sseChunks.length > 0 ? JSON.stringify(sseChunks) : rawSse
 
-    const result = parseApiResponse(rawResponse)
+        const result = parseApiResponse(rawResponse)
 
-    // Record usage (fire-and-forget) - use actual native model ID
-    const inputTokens = result.usage?.inputTokens || 0
-    const outputTokens = result.usage?.outputTokens || 0
-    const actualModelId = getAntigravityModelName(request.model)
-    if (inputTokens > 0 || outputTokens > 0) {
-        import("~/services/usage-tracker").then(({ recordUsage }) => {
-            recordUsage(actualModelId, inputTokens, outputTokens)
-        }).catch(() => { })
+        // Record usage (fire-and-forget) - use actual native model ID
+        const inputTokens = result.usage?.inputTokens || 0
+        const outputTokens = result.usage?.outputTokens || 0
+        const actualModelId = getAntigravityModelName(request.model)
+        if (inputTokens > 0 || outputTokens > 0) {
+            import("~/services/usage-tracker").then(({ recordUsage }) => {
+                recordUsage(actualModelId, inputTokens, outputTokens)
+            }).catch(() => { })
+        }
+
+        return result
+    } finally {
+        if (releaseAccountLock) releaseAccountLock()
     }
-
-    return result
 }
 
 export async function* createChatCompletionStream(request: ChatRequest): AsyncGenerator<string, void, unknown> {
@@ -834,6 +981,7 @@ export async function* createChatCompletionStreamWithOptions(
     let accountId: string | undefined
     let projectId: string | undefined
     let accountEmail: string | undefined
+    let releaseAccountLock: (() => void) | null = null
 
     if (options.accountId) {
         const account = await accountManager.getAccountById(options.accountId)
@@ -858,28 +1006,33 @@ export async function* createChatCompletionStreamWithOptions(
         }
     }
 
-    const antigravityRequest = claudeToAntigravity(
-        getAntigravityModelName(request.model),
-        request.messages,
-        request.tools
-    )
+    if (accountId) {
+        releaseAccountLock = await accountManager.acquireAccountLock(accountId)
+    }
 
-    if (projectId) antigravityRequest.project = projectId
+    try {
+        const antigravityRequest = claudeToAntigravity(
+            getAntigravityModelName(request.model),
+            request.messages,
+            request.tools,
+            request.toolChoice
+        )
 
-    // 🆕 使用真正的流式读取，边读边处理边 yield
-    const sseStream = sendRequestSseStreaming(
-        STREAM_ENDPOINT,
-        antigravityRequest,
-        accessToken,
-        accountId,
-        request.model
-    )
+        if (projectId) antigravityRequest.project = projectId
 
-    let hasFirstResponse = false
-    let blockIndex = 0
-    let hasToolUse = false
-    let outputTokens = 0
-    let textBlockStarted = false
+        // 🆕 使用真正的流式读取，边读边处理边 yield
+        const sseStream = sendRequestSseStreaming(
+            STREAM_ENDPOINT,
+            antigravityRequest,
+            accessToken,
+            accountId,
+            request.model
+        )
+
+        let blockIndex = 0
+        let hasToolUse = false
+        let outputTokens = 0
+        let textBlockStarted = false
 
     const messageStart = {
         type: "message_start",
@@ -895,14 +1048,6 @@ export async function* createChatCompletionStreamWithOptions(
         }
     }
     yield "event: message_start\ndata: " + JSON.stringify(messageStart) + "\n\n"
-    const initialTextBlock = {
-        type: "content_block_start",
-        index: blockIndex,
-        content_block: { type: "text", text: "" },
-    }
-    yield "event: content_block_start\ndata: " + JSON.stringify(initialTextBlock) + "\n\n"
-    textBlockStarted = true
-    hasFirstResponse = true
 
     for await (const chunkStr of sseStream) {
         // 解析 JSON 字符串
@@ -916,10 +1061,6 @@ export async function* createChatCompletionStreamWithOptions(
         // chunk 可能直接是响应，也可能包含 response 字段
         const responseData = chunk.response || chunk
         const parts = responseData?.candidates?.[0]?.content?.parts || []
-
-        if (!hasFirstResponse) {
-            hasFirstResponse = true
-        }
 
         for (const part of parts) {
             if (part.text) {
@@ -954,25 +1095,31 @@ export async function* createChatCompletionStreamWithOptions(
             }
         }
 
-        const usage = responseData?.usageMetadata
-        if (usage) outputTokens = (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0)
-    }
+            const usage = responseData?.usageMetadata
+            if (usage) outputTokens = (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0)
+        }
 
-    // 关闭最后的文本块（如果有）
-    if (textBlockStarted) {
-        yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
-    }
+        // 关闭最后的文本块（如果有）
+        if (textBlockStarted) {
+            yield "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":" + blockIndex + "}\n\n"
+        }
 
+    if (!hasToolUse && request.toolChoice?.type === "tool") {
+        consola.warn(`Tool choice "${request.toolChoice.name || "unknown"}" requested but no tool_use returned`)
+    }
     const stopReason = hasToolUse ? "tool_use" : "end_turn"
-    const messageDelta = { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } }
-    yield "event: message_delta\ndata: " + JSON.stringify(messageDelta) + "\n\n"
-    yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+        const messageDelta = { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: outputTokens } }
+        yield "event: message_delta\ndata: " + JSON.stringify(messageDelta) + "\n\n"
+        yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
-    // Record usage (fire-and-forget) - use actual native model ID
-    const actualModelId = getAntigravityModelName(request.model)
-    if (outputTokens > 0) {
-        import("~/services/usage-tracker").then(({ recordUsage }) => {
-            recordUsage(actualModelId, 0, outputTokens)
-        }).catch(() => { })
+        // Record usage (fire-and-forget) - use actual native model ID
+        const actualModelId = getAntigravityModelName(request.model)
+        if (outputTokens > 0) {
+            import("~/services/usage-tracker").then(({ recordUsage }) => {
+                recordUsage(actualModelId, 0, outputTokens)
+            }).catch(() => { })
+        }
+    } finally {
+        if (releaseAccountLock) releaseAccountLock()
     }
 }

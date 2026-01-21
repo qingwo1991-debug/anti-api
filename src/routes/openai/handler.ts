@@ -6,7 +6,7 @@ import type { Context } from "hono"
 import { streamSSE } from "hono/streaming"
 import consola from "consola"
 
-import { createChatCompletion, createChatCompletionStream } from "~/services/antigravity/chat"
+import { createRoutedCompletion, createRoutedCompletionStream, RoutingError } from "~/services/routing/router"
 import type { OpenAIChatCompletionRequest } from "./types"
 import {
     mapModel,
@@ -18,38 +18,42 @@ import {
 } from "./translator"
 import { validateChatRequest } from "~/lib/validation"
 import { rateLimiter } from "~/lib/rate-limiter"
+import { forwardError, summarizeUpstreamError, UpstreamError } from "~/lib/error"
 
 export async function handleChatCompletion(c: Context): Promise<Response> {
-    // 🆕 获取全局锁 - 确保请求串行化
-    const releaseLock = await rateLimiter.acquireExclusive()
-    let releaseInFinally = true
-
     try {
         const payload = await c.req.json<OpenAIChatCompletionRequest>()
 
         // Input validation
         const validation = validateChatRequest(payload)
         if (!validation.valid) {
-            releaseLock()
             return c.json({ error: { type: "invalid_request_error", message: validation.error } }, 400)
         }
+
+        await rateLimiter.wait()
 
         const anthropicModel = mapModel(payload.model)
         const messages = translateMessages(payload.messages)
         const tools = translateTools(payload.tools)
 
         if (payload.stream) {
-            const response = await handleStreamCompletion(c, payload, anthropicModel, messages, tools, releaseLock)
-            releaseInFinally = false
-            return response
+            return handleStreamCompletion(c, payload, anthropicModel, messages, tools)
         }
 
-        const result = await createChatCompletion({
-            model: anthropicModel,
-            messages,
-            tools,
-            maxTokens: payload.max_tokens || 4096,
-        })
+        let result
+        try {
+            result = await createRoutedCompletion({
+                model: anthropicModel,
+                messages,
+                tools,
+                maxTokens: payload.max_tokens || 4096,
+            })
+        } catch (error) {
+            if (error instanceof RoutingError) {
+                return c.json({ error: { type: "invalid_request_error", message: error.message } }, error.status)
+            }
+            throw error
+        }
 
         let textContent = ""
         const toolCalls: any[] = []
@@ -88,12 +92,13 @@ export async function handleChatCompletion(c: Context): Promise<Response> {
             },
         })
     } catch (error) {
+        if (error instanceof UpstreamError) {
+            return await forwardError(c, error)
+        }
         consola.error("OpenAI completion error:", error)
         return c.json({ error: { message: (error as Error).message, type: "api_error" } }, 500)
     } finally {
-        if (releaseInFinally) {
-            releaseLock()
-        }
+        // no-op
     }
 }
 
@@ -102,14 +107,13 @@ async function handleStreamCompletion(
     payload: OpenAIChatCompletionRequest,
     anthropicModel: string,
     messages: any[],
-    tools: any[] | undefined,
-    releaseLock: () => void
+    tools: any[] | undefined
 ): Promise<Response> {
     const chatId = generateChatId()
 
     return streamSSE(c, async (stream) => {
         try {
-            const chatStream = createChatCompletionStream({
+            const chatStream = createRoutedCompletionStream({
                 model: anthropicModel,
                 messages,
                 tools,
@@ -193,10 +197,23 @@ async function handleStreamCompletion(
 
             await stream.writeSSE({ data: "[DONE]" })
         } catch (error) {
-            consola.error("OpenAI stream error:", error)
-            await stream.writeSSE({ data: JSON.stringify({ error: { message: (error as Error).message, type: "api_error" } }) })
-        } finally {
-            releaseLock()
-        }
+            if (error instanceof UpstreamError) {
+                const summary = summarizeUpstreamError(error)
+                consola.error("OpenAI stream error:", summary.message)
+                await stream.writeSSE({
+                    data: JSON.stringify({
+                        error: {
+                            type: "upstream_error",
+                            message: summary.message,
+                            provider: error.provider,
+                            ...(summary.reason ? { reason: summary.reason } : {}),
+                        },
+                    }),
+                })
+            } else {
+                consola.error("OpenAI stream error:", error)
+                await stream.writeSSE({ data: JSON.stringify({ error: { message: (error as Error).message, type: "api_error" } }) })
+            }
+        } finally { }
     })
 }

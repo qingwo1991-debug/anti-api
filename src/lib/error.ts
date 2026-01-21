@@ -38,13 +38,95 @@ export class UpstreamError extends Error {
     }
 }
 
+export type Upstream429Reason =
+    | "quota_exhausted"
+    | "rate_limit_exceeded"
+    | "model_capacity_exhausted"
+    | "resource_exhausted"
+    | "unknown"
+
+type ParsedUpstreamError = {
+    reason?: string
+    message?: string
+    status?: string
+}
+
+function parseUpstreamErrorBody(body: string): ParsedUpstreamError {
+    const trimmed = (body || "").trim()
+    if (!trimmed) return {}
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+            const json = JSON.parse(trimmed)
+            const err = json?.error || json
+            const details = err?.details
+            let reason: string | undefined
+            if (Array.isArray(details)) {
+                for (const detail of details) {
+                    if (typeof detail?.reason === "string") {
+                        reason = detail.reason
+                        break
+                    }
+                }
+            }
+            return {
+                reason,
+                message: typeof err?.message === "string" ? err.message : undefined,
+                status: typeof err?.status === "string" ? err.status : undefined,
+            }
+        } catch {
+            return { message: trimmed }
+        }
+    }
+    return { message: trimmed }
+}
+
+export function summarizeUpstream429(error: UpstreamError): { reason: Upstream429Reason; message: string } {
+    const providerName = error.provider === "antigravity" ? "Antigravity" : error.provider
+    const parsed = parseUpstreamErrorBody(error.body || "")
+    const rawReason = parsed.reason || ""
+    const messageText = parsed.message || ""
+    const lower = messageText.toLowerCase()
+
+    let reason: Upstream429Reason = "unknown"
+    if (rawReason === "QUOTA_EXHAUSTED" || (lower.includes("quota") && lower.includes("reset"))) {
+        reason = "quota_exhausted"
+    } else if (rawReason === "MODEL_CAPACITY_EXHAUSTED" || lower.includes("no capacity") || lower.includes("capacity")) {
+        reason = "model_capacity_exhausted"
+    } else if (rawReason === "RATE_LIMIT_EXCEEDED" || lower.includes("rate limit") || lower.includes("per minute") || lower.includes("too many requests")) {
+        reason = "rate_limit_exceeded"
+    } else if (parsed.status === "RESOURCE_EXHAUSTED") {
+        reason = "resource_exhausted"
+    }
+
+    switch (reason) {
+        case "quota_exhausted":
+            return { reason, message: `${providerName} quota exhausted for this account or model.` }
+        case "model_capacity_exhausted":
+            return { reason, message: `${providerName} model capacity exhausted (temporary). Quota may still be available.` }
+        case "rate_limit_exceeded":
+            return { reason, message: `${providerName} rate limit exceeded (requests too fast). Quota may still be available.` }
+        case "resource_exhausted":
+            return { reason, message: `${providerName} resource exhausted (temporary). Quota may still be available.` }
+        default:
+            return { reason: "unknown", message: `${providerName} upstream error (429).` }
+    }
+}
+
+export function summarizeUpstreamError(error: UpstreamError): { message: string; reason?: string } {
+    if (error.status === 429) {
+        const summary = summarizeUpstream429(error)
+        return { message: summary.message, reason: summary.reason }
+    }
+    return { message: error.body || error.message }
+}
+
 function buildLogReason(error: unknown): string {
     if (error instanceof UpstreamError) {
-        const body = (error.body || "").toLowerCase()
         if (error.status === 429) {
-            if (body.includes("resource_exhausted") || body.includes("quota")) {
-                return "quota exhausted"
-            }
+            const summary = summarizeUpstream429(error)
+            if (summary.reason === "quota_exhausted") return "quota exhausted"
+            if (summary.reason === "model_capacity_exhausted") return "model capacity exhausted"
+            if (summary.reason === "resource_exhausted") return "resource exhausted"
             return "rate limited"
         }
         if (error.status === 401) return "unauthorized"
@@ -103,13 +185,16 @@ export async function forwardError(c: Context, error: unknown) {
     }
 
     if (error instanceof UpstreamError) {
+        const summary = summarizeUpstreamError(error)
         c.header("X-Log-Reason", buildLogReason(error))
         return c.json(
             {
                 error: {
                     type: "upstream_error",
-                    message: error.body || error.message,
+                    message: summary.message,
                     provider: error.provider,
+                    ...(summary.reason ? { reason: summary.reason } : {}),
+                    ...(error.status === 429 && error.body ? { detail: error.body.slice(0, 800) } : {}),
                 },
             },
             error.status as ContentfulStatusCode,

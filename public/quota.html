@@ -56,6 +56,13 @@
 
         .card-3d {
             perspective: 1000px;
+            cursor: pointer;
+        }
+
+        .card-3d button,
+        .card-3d a,
+        .card-3d input {
+            cursor: pointer;
         }
 
         .card-inner {
@@ -250,6 +257,7 @@
             }
         }
 
+
         /* Toggle Switch */
         .toggle-switch {
             appearance: none;
@@ -406,13 +414,13 @@
             <!-- Model Distribution with integrated breakdown -->
             <div class="rounded-xl border border-gray-800 p-5">
                 <div class="text-sm font-bold text-gray-300 mb-4">Model Distribution</div>
-                <div class="flex flex-col md:flex-row gap-10 py-4">
+                <div class="flex flex-col md:flex-row md:items-center gap-10 py-4">
                     <!-- Chart on left -->
                     <div class="flex-shrink-0 ml-4" style="width: 240px; height: 240px;">
                         <canvas id="model-chart"></canvas>
                     </div>
                     <!-- Model details on right -->
-                    <div id="usage-model-list" class="flex-1 space-y-1 flex flex-col justify-end">
+                    <div id="usage-model-list" class="flex-1 space-y-1 flex flex-col">
                         <div class="text-gray-500 text-sm text-center py-4">No usage data yet</div>
                     </div>
                 </div>
@@ -438,7 +446,7 @@
                 <p class="text-gray-500 text-sm font-bold mt-1">Configure application behavior</p>
             </div>
 
-            <div class="grid grid-cols-1 gap-4 max-w-3xl lg:grid-cols-2">
+            <div class="grid grid-cols-1 gap-4 max-w-5xl lg:grid-cols-3">
                 <div class="space-y-4">
                     <!-- Preload Routing -->
                     <label
@@ -452,7 +460,7 @@
                         <input type="checkbox" id="setting-preload-routing" class="toggle-switch" checked>
                     </label>
 
-                    <!-- Auto Ngrok -->
+                    <!-- Auto Start ngrok -->
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
@@ -472,19 +480,19 @@
                         </div>
                         <input type="checkbox" id="setting-auto-open" class="toggle-switch" checked>
                     </label>
-
-                    <!-- Auto Refresh -->
-                <label
-                    class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
-                    <div>
-                        <div class="text-gray-200 font-medium">Auto Refresh Quota</div>
-                        <div class="text-gray-500 text-xs mt-0.5">Automatically refresh quota and usage every 10 minutes</div>
-                    </div>
-                    <input type="checkbox" id="setting-auto-refresh" class="toggle-switch" checked>
-                </label>
                 </div>
 
                 <div class="space-y-4">
+                    <!-- Auto Refresh -->
+                    <label
+                        class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
+                        <div>
+                            <div class="text-gray-200 font-medium">Auto Refresh Quota</div>
+                            <div class="text-gray-500 text-xs mt-0.5">Automatically refresh quota and usage every 10 minutes</div>
+                        </div>
+                        <input type="checkbox" id="setting-auto-refresh" class="toggle-switch" checked>
+                    </label>
+
                     <!-- Privacy Protection -->
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
@@ -504,7 +512,9 @@
                         </div>
                         <input type="checkbox" id="setting-compact-layout" class="toggle-switch">
                     </label>
+                </div>
 
+                <div class="space-y-4">
                     <!-- Track Token Usage -->
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
@@ -513,6 +523,26 @@
                             <div class="text-gray-500 text-xs mt-0.5">Estimate cost based on token consumption</div>
                         </div>
                         <input type="checkbox" id="setting-track-usage" class="toggle-switch" checked>
+                    </label>
+
+                    <!-- Optimize Quota Sorting -->
+                    <label
+                        class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
+                        <div>
+                            <div class="text-gray-200 font-medium">Optimize Quota Sorting</div>
+                            <div class="text-gray-500 text-xs mt-0.5">Sort cards by remaining quota within each provider</div>
+                        </div>
+                        <input type="checkbox" id="setting-optimize-quota-sort" class="toggle-switch">
+                    </label>
+
+                    <!-- Auto Restart -->
+                    <label
+                        class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
+                        <div>
+                            <div class="text-gray-200 font-medium">Auto Restart (Watchdog)</div>
+                            <div class="text-gray-500 text-xs mt-0.5">Restart server automatically after a crash</div>
+                        </div>
+                        <input type="checkbox" id="setting-auto-restart" class="toggle-switch">
                     </label>
                 </div>
             </div>
@@ -624,9 +654,11 @@
             autoNgrok: false,
             autoOpenDashboard: true,
             autoRefresh: true,
+            autoRestart: false,
             privacyMode: false,
             compactLayout: false,
-            trackUsage: true
+            trackUsage: true,
+            optimizeQuotaSort: false
         };
 
         async function loadSettings() {
@@ -646,9 +678,11 @@
                 autoNgrok: document.getElementById('setting-auto-ngrok').checked,
                 autoOpenDashboard: document.getElementById('setting-auto-open').checked,
                 autoRefresh: document.getElementById('setting-auto-refresh').checked,
+                autoRestart: document.getElementById('setting-auto-restart').checked,
                 privacyMode: document.getElementById('setting-privacy-mode').checked,
                 compactLayout: document.getElementById('setting-compact-layout').checked,
-                trackUsage: document.getElementById('setting-track-usage').checked
+                trackUsage: document.getElementById('setting-track-usage').checked,
+                optimizeQuotaSort: document.getElementById('setting-optimize-quota-sort').checked
             };
             try {
                 const res = await fetch(`${API_BASE}/settings`, {
@@ -680,9 +714,11 @@
             document.getElementById('setting-auto-ngrok').checked = false;
             document.getElementById('setting-auto-open').checked = true;
             document.getElementById('setting-auto-refresh').checked = true;
+            document.getElementById('setting-auto-restart').checked = false;
             document.getElementById('setting-privacy-mode').checked = false;
             document.getElementById('setting-compact-layout').checked = false;
             document.getElementById('setting-track-usage').checked = true;
+            document.getElementById('setting-optimize-quota-sort').checked = false;
 
             // Save defaults to server
             await saveAllSettings();
@@ -694,9 +730,11 @@
             document.getElementById('setting-auto-ngrok').checked = true;
             document.getElementById('setting-auto-open').checked = true;
             document.getElementById('setting-auto-refresh').checked = true;
+            document.getElementById('setting-auto-restart').checked = true;
             document.getElementById('setting-privacy-mode').checked = true;
             document.getElementById('setting-compact-layout').checked = true;
             document.getElementById('setting-track-usage').checked = true;
+            document.getElementById('setting-optimize-quota-sort').checked = true;
 
             await saveAllSettings();
             showSettingsToast('All settings enabled');
@@ -707,9 +745,11 @@
             document.getElementById('setting-auto-ngrok').checked = false;
             document.getElementById('setting-auto-open').checked = false;
             document.getElementById('setting-auto-refresh').checked = false;
+            document.getElementById('setting-auto-restart').checked = false;
             document.getElementById('setting-privacy-mode').checked = false;
             document.getElementById('setting-compact-layout').checked = false;
             document.getElementById('setting-track-usage').checked = false;
+            document.getElementById('setting-optimize-quota-sort').checked = false;
 
             await saveAllSettings();
             showSettingsToast('All settings disabled');
@@ -738,6 +778,12 @@
             // Privacy mode change triggers re-render
             if (typeof settings.privacyMode !== 'undefined') {
                 window._privacyMode = settings.privacyMode;
+            }
+            if (typeof settings.optimizeQuotaSort !== 'undefined') {
+                window._optimizeQuotaSort = settings.optimizeQuotaSort;
+            }
+            if (typeof settings.autoRestart !== 'undefined') {
+                window._autoRestart = settings.autoRestart;
             }
         }
 
@@ -780,12 +826,16 @@
             document.getElementById('setting-auto-ngrok').checked = settings.autoNgrok;
             document.getElementById('setting-auto-open').checked = settings.autoOpenDashboard;
             document.getElementById('setting-auto-refresh').checked = settings.autoRefresh;
+            document.getElementById('setting-auto-restart').checked = settings.autoRestart;
             document.getElementById('setting-privacy-mode').checked = settings.privacyMode;
             document.getElementById('setting-compact-layout').checked = settings.compactLayout;
             document.getElementById('setting-track-usage').checked = settings.trackUsage;
+            document.getElementById('setting-optimize-quota-sort').checked = settings.optimizeQuotaSort;
             window._privacyMode = settings.privacyMode;
             window._compactLayout = settings.compactLayout;
             window._trackUsage = settings.trackUsage;
+            window._optimizeQuotaSort = settings.optimizeQuotaSort;
+            window._autoRestart = settings.autoRestart;
 
             // Apply settings
             if (settings.preloadRouting) {
@@ -820,6 +870,25 @@
             if (!lastRefreshTime) return;
             document.getElementById('last-updated').innerHTML =
                 `Updated <span class="font-bold text-gray-400">${getRelativeTime(lastRefreshTime)}</span>`;
+        }
+
+        function setRefreshState(isRefreshing) {
+            const refreshBtn = document.getElementById('refresh-btn');
+            const lastUpdated = document.getElementById('last-updated');
+            if (!refreshBtn) return;
+            if (isRefreshing) {
+                refreshBtn.disabled = true;
+                refreshBtn.textContent = 'Refreshing...';
+                refreshBtn.classList.add('opacity-70', 'cursor-wait');
+                if (lastUpdated) {
+                    lastUpdated.textContent = 'Refreshing...';
+                }
+            } else {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Refresh';
+                refreshBtn.classList.remove('opacity-70', 'cursor-wait');
+                updateLastUpdatedDisplay();
+            }
         }
 
         // Update relative time every minute
@@ -901,26 +970,38 @@
             // 卡片效果
             document.querySelectorAll('.card-3d').forEach(card => {
                 const inner = card.querySelector('.card-inner');
+                if (!card.dataset.tiltBound) {
+                    card.dataset.tiltBound = 'true';
+                    card.addEventListener('mousemove', (e) => {
+                        const rect = card.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        const centerX = rect.width / 2;
+                        const centerY = rect.height / 2;
 
-                card.addEventListener('mousemove', (e) => {
-                    const rect = card.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const y = e.clientY - rect.top;
-                    const centerX = rect.width / 2;
-                    const centerY = rect.height / 2;
+                        // 计算旋转角度 (最大 15 度)
+                        const rotateX = ((y - centerY) / centerY) * -15;
+                        const rotateY = ((x - centerX) / centerX) * 15;
 
-                    // 计算旋转角度 (最大 15 度)
-                    const rotateX = ((y - centerY) / centerY) * -15;
-                    const rotateY = ((x - centerX) / centerX) * 15;
+                        inner.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
+                        card.classList.add('active');
+                    });
 
-                    inner.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
-                    card.classList.add('active');
-                });
+                    card.addEventListener('mouseleave', () => {
+                        inner.style.transform = 'rotateX(0) rotateY(0)';
+                        card.classList.remove('active');
+                    });
+                }
 
-                card.addEventListener('mouseleave', () => {
-                    inner.style.transform = 'rotateX(0) rotateY(0)';
-                    card.classList.remove('active');
-                });
+                if (!card.dataset.pingBound) {
+                    card.dataset.pingBound = 'true';
+                    card.addEventListener('click', (e) => {
+                        if (e.target.closest('button') || e.target.closest('a') || e.target.closest('input')) {
+                            return;
+                        }
+                        pingAccountCard(card);
+                    });
+                }
             });
 
             // Refresh 按钮效果
@@ -999,6 +1080,42 @@
             }, 2000);
         }
 
+        async function pingAccountCard(card) {
+            if (!card || card.dataset.pinging === 'true') return;
+            const provider = card.dataset.provider;
+            const accountId = card.dataset.accountId;
+            const displayName = card.dataset.displayName || accountId;
+            if (!provider || !accountId) return;
+
+            card.dataset.pinging = 'true';
+
+            try {
+                const response = await fetch(`${API_BASE}/accounts/ping`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider, accountId })
+                });
+                const text = await response.text();
+                let data = null;
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    data = { success: false, error: text || 'Invalid response' };
+                }
+                if (data.success) {
+                    const latencyMs = Number(data.latencyMs || 0);
+                    const latencySec = Math.max(0, latencyMs / 1000).toFixed(1);
+                    showToast(`Latency ${latencySec}s`);
+                } else {
+                    showToast('Unavailable');
+                }
+            } catch (error) {
+                showToast('Unavailable');
+            } finally {
+                card.dataset.pinging = 'false';
+            }
+        }
+
         function copyModelId(modelId) {
             navigator.clipboard.writeText(modelId);
             showToast(`Copied: ${modelId}`);
@@ -1070,7 +1187,7 @@
             const maskedName = provider === 'copilot' ? maskUsername(displayName) : maskEmail(displayName);
 
             return `
-                <div class="card-3d" data-provider="${provider}" data-card-id="${cardId}">
+                <div class="card-3d" data-provider="${provider}" data-card-id="${cardId}" data-account-id="${account.accountId}" data-display-name="${displayName}">
                     <div class="card-inner rounded-2xl p-5">
                         <div class="flex items-center justify-between mb-4">
                             <div class="text-sm font-bold text-gray-200">${maskedName}</div>
@@ -1084,6 +1201,62 @@
                     </div>
                 </div>
             `;
+        }
+
+        function getQuotaBarInfo(account, key, label) {
+            const bars = account.bars || [];
+            const byKey = bars.find(bar => bar.key === key);
+            const byLabel = label ? bars.find(bar => bar.label === label) : null;
+            const bar = byKey || byLabel;
+            const percent = bar?.percentage;
+            return {
+                percent: typeof percent === 'number' ? percent : 0,
+                resetTime: bar?.resetTime || null,
+            };
+        }
+
+        function parseResetTime(resetTime) {
+            if (!resetTime) return Number.POSITIVE_INFINITY;
+            const ts = Date.parse(resetTime);
+            return Number.isNaN(ts) ? Number.POSITIVE_INFINITY : ts;
+        }
+
+        function sortQuotaAccounts(accounts) {
+            if (!window._optimizeQuotaSort) return accounts;
+            const providerOrder = ['antigravity', 'codex', 'copilot'];
+            const sorted = [];
+            const unknown = [];
+
+            for (const provider of providerOrder) {
+                const group = accounts.filter(acc => acc.provider === provider);
+                const metricInfo = (acc) => {
+                    if (provider === 'antigravity') return getQuotaBarInfo(acc, 'claude_gpt', 'claude&gpt');
+                    if (provider === 'codex') return getQuotaBarInfo(acc, 'session', '5h');
+                    if (provider === 'copilot') return getQuotaBarInfo(acc, 'premium', 'premium');
+                    return { percent: 0, resetTime: null };
+                };
+                group.sort((a, b) => {
+                    const aInfo = metricInfo(a);
+                    const bInfo = metricInfo(b);
+                    const diff = bInfo.percent - aInfo.percent;
+                    if (diff !== 0) return diff;
+                    const aReset = parseResetTime(aInfo.resetTime);
+                    const bReset = parseResetTime(bInfo.resetTime);
+                    if (aReset !== bReset) return aReset - bReset;
+                    const nameA = (a.displayName || a.accountId || '').toLowerCase();
+                    const nameB = (b.displayName || b.accountId || '').toLowerCase();
+                    return nameA.localeCompare(nameB);
+                });
+                sorted.push(...group);
+            }
+
+            for (const acc of accounts) {
+                if (!providerOrder.includes(acc.provider)) {
+                    unknown.push(acc);
+                }
+            }
+
+            return [...sorted, ...unknown];
         }
 
         async function fetchQuota(showToastMsg = false) {
@@ -1101,7 +1274,7 @@
                     return;
                 }
 
-                const accounts = data.accounts || [];
+                let accounts = data.accounts || [];
                 const planInfo = document.getElementById('plan-info');
                 planInfo.innerHTML = `<span class="text-gray-300">${accounts.length} account(s)</span> <span class="text-gray-600 text-xs">• Multi-provider quota view</span>`;
 
@@ -1112,6 +1285,7 @@
                     showToast('✓ Refreshed');
                 }
 
+                accounts = sortQuotaAccounts(accounts);
                 const grid = document.getElementById('quota-grid');
                 if (accounts.length === 0) {
                     grid.innerHTML = `
@@ -1463,9 +1637,18 @@
         });
 
         async function refreshAll(showToastMsg = false) {
-            await fetchQuota(showToastMsg);
-            if (window._trackUsage) {
-                await fetchUsageData(showToastMsg);
+            if (showToastMsg) {
+                setRefreshState(true);
+            }
+            try {
+                await fetchQuota(showToastMsg);
+                if (window._trackUsage) {
+                    await fetchUsageData(showToastMsg);
+                }
+            } finally {
+                if (showToastMsg) {
+                    setRefreshState(false);
+                }
             }
         }
 
@@ -1554,13 +1737,24 @@
         let dailyChartInstance = null;
         let modelChartInstance = null;
 
-        // Color palette based on model provider
+        // Color palette aligned with quota cards (red, white, blue-purple)
+        function getCssColor(varName, fallback) {
+            const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+            return value || fallback;
+        }
+
         function getModelColor(model) {
-            const m = model.toLowerCase();
-            if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) return '#22d3ee'; // cyan
-            if (m.includes('claude') || m.includes('opus') || m.includes('sonnet')) return '#4796E3'; // blue
-            if (m.includes('gemini') || m.includes('flash') || m.includes('pro')) return '#22c55e'; // green
-            return '#6b7280'; // gray
+            const m = (model || '').toLowerCase();
+            if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) {
+                return getCssColor('--white-glow', '#ffffff');
+            }
+            if (m.includes('claude') || m.includes('opus') || m.includes('sonnet')) {
+                return getCssColor('--copilot-red', '#f85149');
+            }
+            if (m.includes('gemini') || m.includes('flash') || m.includes('pro')) {
+                return getCssColor('--anti-purple', '#6b4da3');
+            }
+            return getCssColor('--anti-blue', '#4796E3');
         }
 
         function renderCharts(data) {

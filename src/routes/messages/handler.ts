@@ -13,6 +13,8 @@ import { createRoutedCompletion, createRoutedCompletionStream, RoutingError } fr
 import type { ClaudeMessage, ClaudeTool } from "~/lib/translator"
 import { rateLimiter } from "~/lib/rate-limiter"
 import { validateAnthropicRequest } from "~/lib/validation"
+import { UpstreamError } from "~/lib/error"
+import { state } from "~/lib/state"
 import type {
     AnthropicMessagesPayload,
     AnthropicResponse,
@@ -40,6 +42,19 @@ function extractTools(payload: AnthropicMessagesPayload): ClaudeTool[] | undefin
     }))
 }
 
+function collectToolResultIds(messages: ClaudeMessage[]): string[] {
+    const ids: string[] = []
+    for (const message of messages) {
+        if (typeof message.content === "string") continue
+        for (const block of message.content) {
+            if (block.type === "tool_result") {
+                ids.push(block.tool_use_id || "unknown")
+            }
+        }
+    }
+    return ids
+}
+
 /**
  * 生成响应ID
  */
@@ -52,10 +67,6 @@ function generateMessageId(): string {
  * 🆕 在 HTTP 层获取全局锁，确保所有请求串行化
  */
 export async function handleCompletion(c: Context): Promise<Response> {
-    // 🆕 在最开始获取全局锁 - 这是真正的"单进程模拟"
-    const releaseLock = await rateLimiter.acquireExclusive()
-    let releaseInFinally = true
-
     try {
         const payload = await c.req.json<AnthropicMessagesPayload>()
 
@@ -65,23 +76,42 @@ export async function handleCompletion(c: Context): Promise<Response> {
             return c.json({ error: { type: "invalid_request_error", message: validation.error } }, 400)
         }
 
+        await rateLimiter.wait()
+
         const messages = translateMessages(payload)
         const tools = extractTools(payload)
+        const toolChoice = payload.tool_choice
+        if (state.verbose) {
+            if (toolChoice) {
+                const choiceName = toolChoice.type === "tool" && toolChoice.name ? `(${toolChoice.name})` : ""
+                consola.debug(`Debug: tool_choice=${toolChoice.type}${choiceName}`)
+            }
+            if (tools && tools.length > 0) {
+                const toolNames = tools.map(tool => tool.name).slice(0, 8).join(", ")
+                const suffix = tools.length > 8 ? ", ..." : ""
+                consola.debug(`Debug: tools=${tools.length} [${toolNames}${suffix}]`)
+            }
+            const toolResultIds = collectToolResultIds(messages)
+            if (toolResultIds.length > 0) {
+                const preview = toolResultIds.slice(0, 4).join(", ")
+                const suffix = toolResultIds.length > 4 ? ", ..." : ""
+                consola.debug(`Debug: tool_result blocks=${toolResultIds.length} ids=${preview}${suffix}`)
+            }
+        }
 
         // 检查是否流式
         if (payload.stream) {
-            const response = await handleStreamCompletion(c, payload, messages, tools, releaseLock)
-            releaseInFinally = false
-            return response
+            return handleStreamCompletion(c, payload, messages, tools, toolChoice)
         }
 
         // 非流式请求
-        let result
+            let result
         try {
             result = await createRoutedCompletion({
                 model: payload.model,
                 messages,
                 tools,
+                toolChoice,
                 maxTokens: payload.max_tokens,
             })
         } catch (error) {
@@ -126,9 +156,7 @@ export async function handleCompletion(c: Context): Promise<Response> {
 
         return c.json(response)
     } finally {
-        if (releaseInFinally) {
-            releaseLock()
-        }
+        // no-op
     }
 }
 
@@ -141,18 +169,20 @@ async function handleStreamCompletion(
     payload: AnthropicMessagesPayload,
     messages: ClaudeMessage[],
     tools: ClaudeTool[] | undefined,
-    releaseLock: () => void
+    toolChoice: AnthropicMessagesPayload["tool_choice"] | undefined
 ): Promise<Response> {
     return streamSSE(c, async (stream) => {
+        const pingInterval = setInterval(() => {
+            stream.write(": ping\n\n").catch(() => { })
+        }, 15000)
         try {
             const chatStream = createRoutedCompletionStream({
                 model: payload.model,
                 messages,
                 tools,
+                toolChoice,
                 maxTokens: payload.max_tokens,
             })
-
-            // 直接写入来自翻译器的 SSE 事件（不发送 ping，参照 proj-1）
 
             // 直接写入来自翻译器的 SSE 事件
             for await (const event of chatStream) {
@@ -160,7 +190,11 @@ async function handleStreamCompletion(
             }
 
         } catch (error) {
-            consola.error("Stream error:", error)
+            if (error instanceof UpstreamError && error.provider === "antigravity" && error.status === 429) {
+                consola.warn("Stream error: Antigravity 429 rate limit (auto-rotation may continue)")
+            } else {
+                consola.error("Stream error:", error)
+            }
             await stream.writeSSE({
                 event: "error",
                 data: JSON.stringify({
@@ -169,8 +203,7 @@ async function handleStreamCompletion(
                 }),
             })
         } finally {
-            // 🆕 流结束时释放锁
-            releaseLock()
+            clearInterval(pingInterval)
         }
     })
 }

@@ -15,13 +15,12 @@
 
 > **Disclaimer**: This project is based on reverse engineering of Antigravity. Future compatibility is not guaranteed. For long-term use, avoid updating Antigravity.
 
-## What's New (v2.2.0)
+## What's New (v2.2.2)
 
-- ✅ **Routing System Upgrade** - Flow Routing + Account Routing (official model chains)
-- ✅ **Multi-Provider Support** - Antigravity + Codex + GitHub Copilot
-- ✅ **Enhanced Stability** - Input validation, response time logging, startup cleanup
-- ✅ **Better Testing** - Unit tests covering core logic
-- ✅ **Comprehensive Docs** - API reference, architecture, troubleshooting
+- ✅ **429 Handling** - Only switch accounts on QUOTA_EXHAUSTED; transient 429 retries stay on the same account
+- ✅ **Streaming Resilience** - Stream requests fall back across Antigravity base URLs on 404/5xx
+- ✅ **Routing UI Cleanup** - Refactored routing front-end logic for maintainability (no visual change)
+- ✅ **Routing Layout** - Taller component sizing for improved readability
 
 ## Features
 
@@ -273,13 +272,14 @@ MIT
 
 > **免责声明**：本项目基于 Antigravity 逆向开发，未来版本兼容性未知，长久使用请尽可能避免更新Antigravity。
 
-## 更新内容 (v2.2.0)
+## 更新内容 (v2.2.1)
 
-- ✅ **路由系统升级** - Flow 路由 + Account 路由（官方模型账号链）
-- ✅ **多提供商支持** - Antigravity + Codex + GitHub Copilot
-- ✅ **稳定性增强** - 输入验证、响应时间日志、启动清理
-- ✅ **完善测试** - 单元测试覆盖核心逻辑
-- ✅ **完整文档** - API 参考、架构设计、故障排查
+- ✅ **Flow 稳定性** - 粘性游标推进 + 定期探测头部账号
+- ✅ **运行安全** - 上游请求超时 + PID 级启动清理
+- ✅ **配额面板优化** - 扇形图对齐 + 可选排序
+- ✅ **看门狗选项** - 崩溃自动重启（可选）
+- ✅ **错误信息清晰** - 429 日志摘要更明确
+- ✅ **新增测试** - Flow 粘性路由覆盖
 
 ## 特性
 

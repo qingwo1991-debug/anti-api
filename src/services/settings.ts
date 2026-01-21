@@ -16,9 +16,11 @@ export interface AppSettings {
     autoNgrok: boolean
     autoOpenDashboard: boolean
     autoRefresh: boolean
+    autoRestart: boolean
     privacyMode: boolean
     compactLayout: boolean
     trackUsage: boolean
+    optimizeQuotaSort: boolean
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -26,9 +28,11 @@ const DEFAULT_SETTINGS: AppSettings = {
     autoNgrok: false,
     autoOpenDashboard: true,
     autoRefresh: true,
+    autoRestart: false,
     privacyMode: false,
     compactLayout: false,
     trackUsage: true,
+    optimizeQuotaSort: false,
 }
 
 function ensureSettingsDir(): void {

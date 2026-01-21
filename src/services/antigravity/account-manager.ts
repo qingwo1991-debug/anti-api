@@ -11,6 +11,7 @@ import * as path from "path"
 import consola from "consola"
 import { authStore } from "~/services/auth/store"
 import { parseRetryDelay } from "~/lib/retry"
+import { MIN_REQUEST_INTERVAL_MS } from "~/lib/constants"
 import { fetchAntigravityModels, pickResetTime } from "./quota-fetch"
 import { UpstreamError } from "~/lib/error"
 
@@ -95,18 +96,18 @@ function defaultRateLimitMs(reason: RateLimitReason, failures: number): number {
             // [智能限流] 根据连续失败次数动态调整锁定时间
             // 第1次: 60s, 第2次: 5min, 第3次: 30min, 第4次+: 2h
             if (failures <= 1) {
-                consola.warn("检测到配额耗尽 (QUOTA_EXHAUSTED)，第1次失败，锁定 60秒")
+                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 1st failure, lock for 60s")
                 return 60_000
             }
             if (failures === 2) {
-                consola.warn("检测到配额耗尽 (QUOTA_EXHAUSTED)，第2次连续失败，锁定 5分钟")
+                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 2nd consecutive failure, lock for 5 minutes")
                 return 5 * 60_000
             }
             if (failures === 3) {
-                consola.warn("检测到配额耗尽 (QUOTA_EXHAUSTED)，第3次连续失败，锁定 30分钟")
+                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 3rd consecutive failure, lock for 30 minutes")
                 return 30 * 60_000
             }
-            consola.warn(`检测到配额耗尽 (QUOTA_EXHAUSTED)，第${failures}次连续失败，锁定 2小时`)
+            consola.warn(`Detected quota exhausted (QUOTA_EXHAUSTED), ${failures} consecutive failures, lock for 2 hours`)
             return 2 * 60 * 60_000
         }
         case "rate_limit_exceeded":
@@ -115,11 +116,11 @@ function defaultRateLimitMs(reason: RateLimitReason, failures: number): number {
         case "model_capacity_exhausted":
             // 模型容量耗尽：服务端暂时无可用 GPU 实例
             // 这是临时性问题，使用较短的重试时间（15秒）
-            consola.warn("检测到模型容量不足 (MODEL_CAPACITY_EXHAUSTED)，服务端暂无可用实例，15秒后重试")
+            consola.warn("Detected model capacity exhausted (MODEL_CAPACITY_EXHAUSTED), retrying in 15s")
             return 15_000
         case "server_error":
             // 服务器错误：执行"软避让"，默认锁定 20 秒
-            consola.warn("检测到 5xx 错误，执行 20s 软避让...")
+            consola.warn("Detected 5xx error, backing off for 20s...")
             return 20_000
         default:
             // 未知原因：使用中等默认值（60秒）
@@ -150,6 +151,10 @@ class AccountManager {
     private lastUsedAccount: { accountId: string; timestamp: number } | null = null
     // 🆕 粘性账户队列：失败的账户移到队尾，避免反复 429
     private accountQueue: string[] = []
+    // 🆕 账号并发控制（同一账号同一时刻只处理一个请求）
+    private inFlightAccounts = new Set<string>()
+    private accountLocks = new Map<string, Promise<void>>()
+    private lastCallByAccount = new Map<string, number>()
 
     constructor() {
         const homeDir = process.env.HOME || process.env.USERPROFILE || "."
@@ -301,6 +306,9 @@ class AccountManager {
         if (this.accounts.has(accountIdOrEmail)) {
             this.accounts.delete(accountIdOrEmail)
             removeFromQueue(accountIdOrEmail)
+            this.inFlightAccounts.delete(accountIdOrEmail)
+            this.accountLocks.delete(accountIdOrEmail)
+            this.lastCallByAccount.delete(accountIdOrEmail)
             this.save()
             authStore.deleteAccount("antigravity", accountIdOrEmail)
             return true
@@ -311,6 +319,9 @@ class AccountManager {
             if (acc.email === accountIdOrEmail) {
                 this.accounts.delete(id)
                 removeFromQueue(id)
+                this.inFlightAccounts.delete(id)
+                this.accountLocks.delete(id)
+                this.lastCallByAccount.delete(id)
                 this.save()
                 authStore.deleteAccount("antigravity", id)
                 return true
@@ -334,6 +345,51 @@ class AccountManager {
     hasAccount(accountId: string): boolean {
         this.ensureLoaded()
         return this.accounts.has(accountId)
+    }
+
+    /**
+     * 🆕 账号是否正在处理请求
+     */
+    isAccountInFlight(accountId: string): boolean {
+        return this.inFlightAccounts.has(accountId)
+    }
+
+    /**
+     * 🆕 获取账号锁，确保同一账号串行处理
+     */
+    async acquireAccountLock(accountId: string): Promise<() => void> {
+        this.ensureLoaded()
+        const previous = this.accountLocks.get(accountId) || Promise.resolve()
+        let resolveNext: () => void
+
+        const next = new Promise<void>(resolve => {
+            resolveNext = resolve
+        })
+
+        const tail = previous.then(() => next)
+        this.accountLocks.set(accountId, tail)
+
+        await previous
+
+        const lastCall = this.lastCallByAccount.get(accountId) || 0
+        const elapsed = Date.now() - lastCall
+        if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+            await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed))
+        }
+        this.lastCallByAccount.set(accountId, Date.now())
+
+        this.inFlightAccounts.add(accountId)
+
+        let released = false
+        return () => {
+            if (released) return
+            released = true
+            this.inFlightAccounts.delete(accountId)
+            resolveNext!()
+            if (this.accountLocks.get(accountId) === tail) {
+                this.accountLocks.delete(accountId)
+            }
+        }
     }
 
     /**
@@ -363,7 +419,8 @@ class AccountManager {
         statusCode: number,
         errorText: string,
         retryAfterHeader?: string,
-        modelId?: string
+        modelId?: string,
+        options?: { maxDurationMs?: number }
     ): Promise<{ reason: RateLimitReason; durationMs: number } | null> {
         const account = this.accounts.get(accountId)
         if (!account) return null
@@ -386,11 +443,16 @@ class AccountManager {
             // 不调用 fetchAntigravityModels 避免消耗速率限制
             durationMs = 10000 // 10 秒短暂退避（增加以避免快速重试）
             rateLimitedUntil = Date.now() + durationMs
-            return { reason: "rate_limit_exceeded" as RateLimitReason, durationMs }
         }
 
         if (!rateLimitedUntil) {
             durationMs = defaultRateLimitMs(reason, account.consecutiveFailures)
+            rateLimitedUntil = Date.now() + durationMs
+        }
+
+        const maxDurationMs = options?.maxDurationMs
+        if (maxDurationMs && reason !== "quota_exhausted" && durationMs > maxDurationMs) {
+            durationMs = maxDurationMs
             rateLimitedUntil = Date.now() + durationMs
         }
 
@@ -502,12 +564,23 @@ class AccountManager {
             return null
         }
 
+        // 🆕 是否存在空闲账号（避免选中正在处理的账号）
+        const hasIdleAccount = this.accountQueue.some((id) => {
+            const account = this.accounts.get(id)
+            if (!account) return false
+            if (account.rateLimitedUntil && account.rateLimitedUntil > now) return false
+            return !this.inFlightAccounts.has(id)
+        })
+
         // 🆕 粘性策略：使用队列顺序，队首账户优先
         // 如果不是强制轮换，且队首账户可用，则使用它
         if (!forceRotate && this.accountQueue.length > 0) {
             const firstId = this.accountQueue[0]
             const firstAccount = this.accounts.get(firstId)
             if (firstAccount && (!firstAccount.rateLimitedUntil || firstAccount.rateLimitedUntil <= now)) {
+                if (hasIdleAccount && this.inFlightAccounts.has(firstId)) {
+                    // Prefer idle accounts when available
+                } else {
                 // 刷新 token 如果需要
                 if (firstAccount.expiresAt > 0 && now > firstAccount.expiresAt - 5 * 60 * 1000) {
                     try {
@@ -526,6 +599,7 @@ class AccountManager {
                     email: firstAccount.email,
                     accountId: firstAccount.id,
                 }
+                }
             }
         }
 
@@ -537,6 +611,9 @@ class AccountManager {
             // 检查是否被限流
             if (account.rateLimitedUntil && account.rateLimitedUntil > now) {
                 const waitSeconds = Math.ceil((account.rateLimitedUntil - now) / 1000)
+                continue
+            }
+            if (hasIdleAccount && this.inFlightAccounts.has(accountId)) {
                 continue
             }
 

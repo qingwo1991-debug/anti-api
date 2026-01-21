@@ -13,7 +13,7 @@ export interface OpenAIChatCompletionRequest {
 }
 
 export interface OpenAIMessage {
-    role: "system" | "user" | "assistant" | "tool"
+    role: "system" | "user" | "assistant" | "tool" | "developer"
     content: string | null
     tool_calls?: OpenAIToolCall[]
     tool_call_id?: string

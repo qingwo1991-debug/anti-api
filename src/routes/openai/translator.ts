@@ -44,8 +44,16 @@ export function translateMessages(messages: OpenAIMessage[]): ClaudeMessage[] {
             }
         }
 
+        // Map OpenAI roles to Claude roles
+        // Claude only supports: user, assistant
+        // OpenAI system and developer roles → Claude user role
+        let claudeRole: "user" | "assistant" = "user"
+        if (msg.role === "assistant") {
+            claudeRole = "assistant"
+        }
+
         return {
-            role: msg.role === "system" ? "user" : msg.role,
+            role: claudeRole,
             content: msg.content || "",
         } as ClaudeMessage
     })
