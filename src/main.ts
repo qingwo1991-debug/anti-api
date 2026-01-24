@@ -18,6 +18,7 @@ import { getSetting } from "./services/settings"
 
 /**
  * 打开浏览器
+ * 在 Docker/无头环境中静默失败
  */
 function openBrowser(url: string): void {
     const platform = process.platform
@@ -35,7 +36,11 @@ function openBrowser(url: string): void {
         args = [url]
     }
 
-    Bun.spawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" })
+    try {
+        Bun.spawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" })
+    } catch {
+        // 在 Docker/无头环境中静默忽略
+    }
 }
 
 const start = defineCommand({

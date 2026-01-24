@@ -21,6 +21,8 @@ interface ModelUsage {
 interface DailyUsage {
     date: string  // YYYY-MM-DD
     cost: number
+    input: number
+    output: number
 }
 
 interface UsageData {
@@ -47,7 +49,12 @@ export function loadUsage(): void {
             usageCache = {
                 lastUpdated: data.lastUpdated || new Date().toISOString(),
                 models: data.models || {},
-                daily: data.daily || [],
+                daily: Array.isArray(data.daily) ? data.daily.map((entry: any) => ({
+                    date: entry?.date || getTodayString(),
+                    cost: typeof entry?.cost === "number" ? entry.cost : 0,
+                    input: typeof entry?.input === "number" ? entry.input : 0,
+                    output: typeof entry?.output === "number" ? entry.output : 0,
+                })) : [],
             }
         }
     } catch (e) {
@@ -117,8 +124,15 @@ export function recordUsage(model: string, inputTokens: number, outputTokens: nu
     const dailyIndex = usageCache.daily.findIndex(d => d.date === today)
     if (dailyIndex >= 0) {
         usageCache.daily[dailyIndex].cost += requestCost
+        usageCache.daily[dailyIndex].input += inputTokens
+        usageCache.daily[dailyIndex].output += outputTokens
     } else {
-        usageCache.daily.push({ date: today, cost: requestCost })
+        usageCache.daily.push({
+            date: today,
+            cost: requestCost,
+            input: inputTokens,
+            output: outputTokens,
+        })
         // Keep only last 14 days
         if (usageCache.daily.length > 14) {
             usageCache.daily = usageCache.daily.slice(-14)
@@ -153,7 +167,7 @@ export function getUsage(): {
         cost: number
     }>
     totalCost: number
-    daily: Array<{ date: string; cost: number }>
+    daily: Array<{ date: string; cost: number; input: number; output: number }>
 } {
     const models = Object.entries(usageCache.models).map(([model, usage]) => {
         const costs = calculateCost(model, usage)
@@ -179,6 +193,8 @@ export function getUsage(): {
         daily: usageCache.daily.map(d => ({
             date: d.date,
             cost: Math.round(d.cost * 100) / 100,
+            input: Math.round(d.input || 0),
+            output: Math.round(d.output || 0),
         })),
     }
 }

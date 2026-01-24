@@ -1,0 +1,11 @@
+.git
+.gitignore
+.DS_Store
+node_modules
+dist
+data
+*.log
+*.zip
+rust-proxy/target
+test
+docs

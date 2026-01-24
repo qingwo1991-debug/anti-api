@@ -1,0 +1,15 @@
+services:
+  anti-api:
+    build: .
+    ports:
+      - "8964:8964"
+      - "51121:51121"
+    environment:
+      HOME: /app/data
+      ANTI_API_OAUTH_NO_OPEN: "1"
+    volumes:
+      - anti-api-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  anti-api-data:

@@ -37,6 +37,9 @@ type FlowStickyState = {
     cursor: number
     lastProbeAt?: number
 }
+type AccountStickyState = {
+    cursor: number
+}
 
 type ProviderUsage = {
     usage?: {
@@ -57,6 +60,7 @@ const routerRateLimits = new Map<string, number>()  // "provider:accountId" -> e
 const PROVIDER_ORDER: AuthProvider[] = ["antigravity", "codex", "copilot"]
 let officialModelIndex: Map<string, Set<AuthProvider>> | null = null
 const flowStickyStates = new Map<string, FlowStickyState>()
+const accountStickyStates = new Map<string, AccountStickyState>()
 
 function getRouterRateLimitKey(provider: string, accountId: string): string {
     return `${provider}:${accountId}`
@@ -89,6 +93,25 @@ function getFlowStickyState(flowKey: string, entriesLength: number): FlowStickyS
         existing.cursor = 0
     }
     return existing
+}
+
+function getAccountStickyState(model: string, entriesLength: number): AccountStickyState {
+    const key = model || ""
+    const existing = accountStickyStates.get(key)
+    if (!existing) {
+        const state = { cursor: 0 }
+        accountStickyStates.set(key, state)
+        return state
+    }
+    if (existing.cursor < 0 || existing.cursor >= entriesLength) {
+        existing.cursor = 0
+    }
+    return existing
+}
+
+function advanceAccountCursor(state: AccountStickyState | null, entriesLength: number, currentIndex: number): void {
+    if (!state || entriesLength <= 1) return
+    state.cursor = (currentIndex + 1) % entriesLength
 }
 
 function buildOfficialModelIndex(): Map<string, Set<AuthProvider>> {
@@ -226,8 +249,15 @@ const FALLBACK_STATUSES = new Set([401, 403, 408, 429, 500, 503, 529])
 const FLOW_PROBE_INTERVAL_MS = 30_000
 
 function isAccountUnavailableError(error: unknown): boolean {
+    if (error instanceof UpstreamError) {
+        if (error.status !== 429) return false
+        const body = (error.body || "").trim()
+        if (body.startsWith("Account unavailable:")) return true
+    }
     if (!(error instanceof Error)) return false
-    return error.message.startsWith("Account not found:")
+    if (error.message.startsWith("Account not found:")) return true
+    if (error.message.startsWith("Account unavailable:")) return true
+    return false
 }
 
 function isTransientTransportError(error: unknown): boolean {
@@ -238,7 +268,7 @@ function isTransientTransportError(error: unknown): boolean {
 function shouldFallbackOnUpstream(error: UpstreamError): boolean {
     if ((error as any).streamingStarted) return false
     if (error.status === 429) {
-        return isQuotaExhausted(error)
+        return isQuotaExhausted(error) || (error as any).retryable === true
     }
     return FALLBACK_STATUSES.has(error.status)
 }
@@ -561,8 +591,12 @@ async function createFlowCompletionWithEntries(request: RoutedRequest, entries: 
 
 async function createAccountCompletionWithEntries(request: RoutedRequest, entries: AccountRoutingEntry[]) {
     let lastError: Error | null = null
+    const accountState = getAccountStickyState(request.model, entries.length)
+    const startIndex = accountState?.cursor ?? 0
 
-    for (const entry of entries) {
+    for (let offset = 0; offset < entries.length; offset++) {
+        const index = (startIndex + offset) % entries.length
+        const entry = entries[index]
         try {
             if (entry.provider === "antigravity") {
                 if (entry.accountId === "auto") {
@@ -573,10 +607,12 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
                 const accountDisplay = getAccountDisplay("antigravity", entry.accountId)
                 setRequestLogContext({ model: request.model, provider: "antigravity", account: accountDisplay })
-                return await createChatCompletionWithOptions({ ...request, model: request.model }, {
+                const result = await createChatCompletionWithOptions({ ...request, model: request.model }, {
                     accountId: entry.accountId,
                     allowRotation: false,
                 })
+                accountState.cursor = index
+                return result
             }
 
             if (authStore.isRateLimited(entry.provider, entry.accountId)) {
@@ -596,6 +632,7 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 recordProviderUsage(request.model, result)
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
                 console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Codex >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+                accountState.cursor = index
                 return result
             }
 
@@ -605,11 +642,13 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 recordProviderUsage(request.model, result)
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
                 console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
+                accountState.cursor = index
                 return result
             }
         } catch (error) {
             lastError = error as Error
             if (entry.provider === "antigravity" && isAccountUnavailableError(error)) {
+                advanceAccountCursor(accountState, entries.length, index)
                 continue
             }
             if (error instanceof UpstreamError && shouldFallbackOnUpstream(error)) {
@@ -620,12 +659,14 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                     authStore.markRateLimited(entry.provider, entry.accountId, error.status, error.body, error.retryAfter)
                     markRouterRateLimited(entry.provider, entry.accountId, 60000)
                 }
+                advanceAccountCursor(accountState, entries.length, index)
                 continue
             }
             if (isTransientTransportError(error)) {
                 if (entry.provider !== "antigravity") {
                     authStore.markRateLimited(entry.provider, entry.accountId, 500, (error as Error).message)
                 }
+                advanceAccountCursor(accountState, entries.length, index)
                 continue
             }
             throw error
@@ -863,8 +904,12 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
 
 async function* createAccountCompletionStreamWithEntries(request: RoutedRequest, entries: AccountRoutingEntry[]): AsyncGenerator<string, void, unknown> {
     let lastError: Error | null = null
+    const accountState = getAccountStickyState(request.model, entries.length)
+    const startIndex = accountState?.cursor ?? 0
 
-    for (const entry of entries) {
+    for (let offset = 0; offset < entries.length; offset++) {
+        const index = (startIndex + offset) % entries.length
+        const entry = entries[index]
         try {
             if (entry.provider === "antigravity") {
                 if (entry.accountId === "auto") {
@@ -877,6 +922,7 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
                     accountId: entry.accountId,
                     allowRotation: false,
                 })
+                accountState.cursor = index
                 return
             }
 
@@ -933,10 +979,12 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
                 console.log(`\x1b[32m[${formatLogTime()}] 200: from ${request.model} > Copilot >> ${accountDisplay} (${elapsed}s)\x1b[0m`)
             }
+            accountState.cursor = index
             return
         } catch (error) {
             lastError = error as Error
             if (entry.provider === "antigravity" && isAccountUnavailableError(error)) {
+                advanceAccountCursor(accountState, entries.length, index)
                 continue
             }
             if (error instanceof UpstreamError && shouldFallbackOnUpstream(error)) {
@@ -947,12 +995,14 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
                     authStore.markRateLimited(entry.provider, entry.accountId, error.status, error.body, error.retryAfter)
                     markRouterRateLimited(entry.provider, entry.accountId, 60000)
                 }
+                advanceAccountCursor(accountState, entries.length, index)
                 continue
             }
             if (isTransientTransportError(error)) {
                 if (entry.provider !== "antigravity") {
                     authStore.markRateLimited(entry.provider, entry.accountId, 500, (error as Error).message)
                 }
+                advanceAccountCursor(accountState, entries.length, index)
                 continue
             }
             throw error

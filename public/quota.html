@@ -401,10 +401,12 @@
                         <div class="text-center">
                             <div class="text-gray-400 text-base mb-3">Today Cost</div>
                             <div id="usage-today-cost" class="text-4xl font-bold text-cyan-400">$0.00</div>
+                            <div id="usage-today-tokens" class="text-[11px] text-gray-500 mt-2 hidden">0 tokens</div>
                         </div>
                         <div class="text-center border-t border-gray-700 pt-6">
                             <div class="text-gray-400 text-base mb-3">Total Cost</div>
                             <div id="usage-total-large" class="text-4xl font-bold text-cyan-400">$0.00</div>
+                            <div id="usage-total-tokens" class="text-[11px] text-gray-500 mt-2">0 tokens</div>
                         </div>
                     </div>
                     <div class="text-[10px] text-gray-600 mt-5 text-center">Based on public API pricing</div>
@@ -1276,7 +1278,7 @@
 
                 let accounts = data.accounts || [];
                 const planInfo = document.getElementById('plan-info');
-                planInfo.innerHTML = `<span class="text-gray-300">${accounts.length} account(s)</span> <span class="text-gray-600 text-xs">• Multi-provider quota view</span>`;
+                planInfo.innerHTML = `<span class="text-gray-300">${accounts.length} account(s)</span> <span class="text-gray-600 text-xs">• Tap to ping account</span>`;
 
                 // Log refresh success
                 console.log(`\x1b[32m200: Quota refreshed (${accounts.length} accounts)\x1b[0m`);
@@ -1463,6 +1465,7 @@
                 if (provider === 'copilot') {
                     if (data.status === 'success' && data.source === 'import') {
                         setAddAccountStatus(`Imported Copilot: ${data.login || 'Copilot'}`);
+                        closeAddAccountModal();
                         await checkAuthStatus();
                         fetchQuota(true);
                         return;
@@ -1483,8 +1486,10 @@
                         const first = (data.accounts && data.accounts[0]) || {};
                         setAddAccountStatus(`Imported Codex: ${first.email || first.id || 'Codex'}`);
                     }
+                    closeAddAccountModal();
                 } else {
                     setAddAccountStatus(`Connected: ${data.email || data.id || provider}`);
+                    closeAddAccountModal();
                 }
                 await checkAuthStatus();
                 fetchQuota(true);
@@ -1525,6 +1530,7 @@
             const data = await status.json();
             if (data.status === 'success') {
                 setAddAccountStatus(`Connected: ${data.account?.login || 'Copilot'}`);
+                closeAddAccountModal();
                 await checkAuthStatus();
                 fetchQuota(true);
                 return;
@@ -1553,6 +1559,7 @@
                     const first = (data.accounts && data.accounts[0]) || {};
                     setAddAccountStatus(`Connected: ${first.email || first.id || 'Codex'}`);
                 }
+                closeAddAccountModal();
                 await checkAuthStatus();
                 fetchQuota(true);
                 return;
@@ -1665,6 +1672,10 @@
             const totalEl = document.getElementById('usage-total-large');
             const gridEl = document.getElementById('usage-model-list');
             if (totalEl) totalEl.textContent = '...';
+            const todayTokensEl = document.getElementById('usage-today-tokens');
+            const totalTokensEl = document.getElementById('usage-total-tokens');
+            if (todayTokensEl) todayTokensEl.classList.add('hidden');
+            if (totalTokensEl) totalTokensEl.textContent = '... tokens';
             if (gridEl) gridEl.innerHTML = '<div class="text-gray-500 text-sm text-center py-4">Loading...</div>';
 
             try {
@@ -1687,12 +1698,22 @@
         function renderUsageData(data) {
             const grid = document.getElementById('usage-model-list');
             const models = data.models || [];
+            const formatTokenCount = (value) => {
+                const num = Number(value) || 0;
+                if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
+                if (num >= 1000) return Math.round(num / 1000) + 'K';
+                return String(Math.round(num));
+            };
+            const todayTokensEl = document.getElementById('usage-today-tokens');
+            const totalTokensEl = document.getElementById('usage-total-tokens');
 
             if (models.length === 0) {
                 grid.innerHTML = `<div class="text-gray-500 text-sm text-center py-4">No usage data yet</div>`;
                 document.getElementById('usage-total-large').textContent = '$0.00';
                 const todayCostEl = document.getElementById('usage-today-cost');
                 if (todayCostEl) todayCostEl.textContent = '$0.00';
+                if (todayTokensEl) todayTokensEl.classList.add('hidden');
+                if (totalTokensEl) totalTokensEl.textContent = '0 tokens';
                 return;
             }
 
@@ -1723,10 +1744,29 @@
             // Calculate and display today's cost (use local date to match backend)
             const now = new Date();
             const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-            const todayCost = (data.daily || []).find(d => d.date === today)?.cost || 0;
+            const todayEntry = (data.daily || []).find(d => d.date === today) || {};
+            const todayCost = todayEntry.cost || 0;
             const todayCostEl = document.getElementById('usage-today-cost');
             if (todayCostEl) {
                 todayCostEl.textContent = `$${todayCost.toFixed(2)}`;
+            }
+            if (todayTokensEl) {
+                const totalTokens = (todayEntry.input || 0) + (todayEntry.output || 0);
+                if (totalTokens > 0) {
+                    todayTokensEl.textContent = `${formatTokenCount(totalTokens)} tokens`;
+                    todayTokensEl.classList.remove('hidden');
+                } else {
+                    todayTokensEl.classList.add('hidden');
+                }
+            }
+            if (totalTokensEl) {
+                const totals = models.reduce((acc, m) => {
+                    acc.input += Number(m.input) || 0;
+                    acc.output += Number(m.output) || 0;
+                    return acc;
+                }, { input: 0, output: 0 });
+                const totalTokens = totals.input + totals.output;
+                totalTokensEl.textContent = `${formatTokenCount(totalTokens)} tokens`;
             }
 
             // Render charts

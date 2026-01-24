@@ -61,6 +61,36 @@ Double-click `anti-api-start.bat` to launch.
 
 Double-click `anti-api-start.command` to launch.
 
+### Docker
+
+Build:
+
+```bash
+docker build -t anti-api .
+```
+
+Run:
+
+```bash
+docker run --rm -it \\
+  -p 8964:8964 \\
+  -p 51121:51121 \\
+  -e HOME=/app/data \\
+  -e ANTI_API_OAUTH_NO_OPEN=1 \\
+  -v anti-api-data:/app/data \\
+  anti-api
+```
+
+Compose:
+
+```bash
+docker compose up --build
+```
+
+Notes:
+- OAuth callback uses port `51121`. Make sure it is mapped.
+- If running on a remote host, set `ANTI_API_OAUTH_REDIRECT_URL` to a public URL like `http://YOUR_HOST:51121/oauth-callback`.
+
 ## Development
 
 - **Formatting**: follow `.editorconfig` (4-space indent, LF).

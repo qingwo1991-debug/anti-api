@@ -131,22 +131,26 @@ export function setAuth(accessToken: string, refreshToken?: string, email?: stri
  * 启动 OAuth 登录流程
  */
 export async function startOAuthLogin(): Promise<{ success: boolean; error?: string; email?: string }> {
+    let oauthServer: { stop: () => void } | null = null
     try {
 
         // 1. 启动回调服务器
         const { server, port, waitForCallback } = await startOAuthCallbackServer()
+        oauthServer = server
 
         // 2. 生成授权 URL
         const oauthState = generateState()
-        const redirectUri = `http://localhost:${port}/oauth-callback`
+        const redirectUri = process.env.ANTI_API_OAUTH_REDIRECT_URL || `http://localhost:${port}/oauth-callback`
         const authUrl = generateAuthURL(redirectUri, oauthState)
 
         // 3. 打开浏览器
-
-        try {
-            await Bun.$`open ${authUrl}`.quiet()
-        } catch (e) {
-            consola.warn("Failed to open browser automatically")
+        consola.info(`Open this URL to login: ${authUrl}`)
+        if (process.env.ANTI_API_OAUTH_NO_OPEN !== "1") {
+            try {
+                await Bun.$`open ${authUrl}`.quiet()
+            } catch {
+                consola.warn("Failed to open browser automatically")
+            }
         }
 
         // 4. 等待回调（5分钟超时）
@@ -161,6 +165,7 @@ export async function startOAuthLogin(): Promise<{ success: boolean; error?: str
 
         // 5. 关闭服务器
         server.stop()
+        oauthServer = null
 
         // 6. 检查回调结果
         if (callbackResult.error) {
@@ -206,6 +211,14 @@ export async function startOAuthLogin(): Promise<{ success: boolean; error?: str
     } catch (error) {
         consola.error("OAuth login failed:", error)
         return { success: false, error: (error as Error).message }
+    } finally {
+        if (oauthServer) {
+            try {
+                oauthServer.stop()
+            } catch {
+                // Best-effort cleanup for abandoned OAuth attempts
+            }
+        }
     }
 }
 

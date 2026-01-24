@@ -23,9 +23,9 @@ const ANTIGRAVITY_BASE_URLS = [
 const STREAM_ENDPOINT = "/v1internal:streamGenerateContent"
 const DEFAULT_USER_AGENT = "antigravity/1.11.9 windows/amd64"
 const MAX_RETRY_ATTEMPTS = 1  // v2.0.1 恢复：简化重试，避免级联 429
-const MAX_WAIT_BEFORE_SWITCH_MS = 5000  // 最多等待5秒再切换账号
-const MAX_NON_QUOTA_429_RETRIES = 2  // 非配额 429 的重试次数（不切换账号）
-const MAX_NON_QUOTA_429_WAIT_MS = 10000  // 非配额 429 最大等待时间
+const MAX_NON_QUOTA_429_RETRIES = 2  // Non-quota 429 retries before switching accounts
+const MAX_NON_QUOTA_429_WAIT_MS = 4000  // Upper bound for non-quota 429 wait time
+const NON_QUOTA_429_COOLDOWN_MS = 8000  // Cooldown before retrying a rate-limited account
 const FETCH_TIMEOUT_MS = 30000  // 防止上游请求长期卡住
 
 /**
@@ -520,8 +520,10 @@ async function sendRequestSse(
     let lastRetryAfterHeader: string | undefined
     let currentAccessToken = accessToken
     let currentAccountId = accountId
+    let nonQuota429Count = 0
 
-    const maxAttempts = Math.max(MAX_RETRY_ATTEMPTS, MAX_NON_QUOTA_429_RETRIES + 1)
+    const rotationBudget = allowRotation ? Math.max(0, accountManager.count() - 1) : 0
+    const maxAttempts = Math.max(MAX_RETRY_ATTEMPTS, MAX_NON_QUOTA_429_RETRIES + 1 + rotationBudget)
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         // 锁已在 handler.ts HTTP 层获取，这里不需要
         for (const baseUrl of ANTIGRAVITY_BASE_URLS) {
@@ -563,7 +565,7 @@ async function sendRequestSse(
                     const boundedDelayMs = Math.min(retryDelayMs, MAX_NON_QUOTA_429_WAIT_MS)
 
                     // 🆕 非配额 429：始终重试同一账号，不切换
-                    if (!quotaExhausted && attempt < maxAttempts - 1) {
+                    if (!quotaExhausted && nonQuota429Count < MAX_NON_QUOTA_429_RETRIES) {
                         // 🆕 关键修复：在等待期间临时标记账号为限流，防止其他并发请求选择它
                         const account = await accountManager.getAccountById(currentAccountId)
                         if (account) {
@@ -577,6 +579,7 @@ async function sendRequestSse(
                             (account as any).rateLimitedUntil = null
                         }
 
+                        nonQuota429Count += 1
                         lastError = new Error("429 - waited and retry")
                         break // 跳出 endpoint 循环，进入下一轮 attempt
                     }
@@ -606,7 +609,25 @@ async function sendRequestSse(
                             }
                         }
                     }
-                    // 非配额 429 不切换账号，直接抛出
+                    if (!quotaExhausted) {
+                        const cooldownMs = Math.max(boundedDelayMs, NON_QUOTA_429_COOLDOWN_MS)
+                        accountManager.markRateLimited(currentAccountId, cooldownMs)
+                        if (allowRotation && accountManager.count() > 1) {
+                            const next = await accountManager.getNextAvailableAccount(true)
+                            if (next && next.accountId !== currentAccountId) {
+                                currentAccessToken = next.accessToken
+                                currentAccountId = next.accountId
+                                antigravityRequest.project = next.projectId
+                                nonQuota429Count = 0
+                                lastError = new Error("429 - switched account")
+                                break
+                            }
+                        }
+                        const upstream = new UpstreamError("antigravity", 429, lastErrorText, lastRetryAfterHeader)
+                        ;(upstream as any).retryable = true
+                        throw upstream
+                    }
+                    // Non-quota 429 with no rotation path
                     throw new UpstreamError("antigravity", 429, lastErrorText, lastRetryAfterHeader)
                 }
 
@@ -682,15 +703,21 @@ async function* sendRequestSseStreaming(
     antigravityRequest: any,
     accessToken: string,
     accountId?: string,
+    allowRotation: boolean = true,
     modelName?: string
 ): AsyncGenerator<string, void, unknown> {
     const startTime = Date.now()
     const READ_TIMEOUT_MS = 180000  // 每次读取最多等待 180 秒
     const IDLE_TIMEOUT_MS = 300000  // 超过 300 秒没有有效 data 则中断
     let lastError: UpstreamError | null = null
+    let currentAccessToken = accessToken
+    let currentAccountId = accountId
+    let nonQuota429Count = 0
+    const rotationBudget = allowRotation ? Math.max(0, accountManager.count() - 1) : 0
+    const maxAttempts = MAX_NON_QUOTA_429_RETRIES + 1 + rotationBudget
 
-    for (let attempt = 0; attempt <= MAX_NON_QUOTA_429_RETRIES; attempt++) {
-        let retrySameAccount = false
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        let retryAttempt = false
         for (const baseUrl of ANTIGRAVITY_BASE_URLS) {
             const url = baseUrl + endpoint + "?alt=sse"
 
@@ -702,7 +729,7 @@ async function* sendRequestSseStreaming(
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        "Authorization": "Bearer " + accessToken,
+                        "Authorization": "Bearer " + currentAccessToken,
                         "User-Agent": DEFAULT_USER_AGENT,
                         "Accept": "text/event-stream",
                     },
@@ -711,12 +738,12 @@ async function* sendRequestSseStreaming(
 
                 if (!response.ok) {
                     const errorText = await response.text()
-                    if (response.status === 429 && accountId) {
+                    if (response.status === 429 && currentAccountId) {
                         const quotaExhausted = isQuotaExhaustedErrorText(errorText)
                         if (quotaExhausted) {
-                            const limitResult = await accountManager.markRateLimitedFromError(accountId, response.status, errorText)
+                            const limitResult = await accountManager.markRateLimitedFromError(currentAccountId, response.status, errorText)
                             if (limitResult?.reason === "quota_exhausted") {
-                                accountManager.moveToEndOfQueue(accountId)
+                                accountManager.moveToEndOfQueue(currentAccountId)
                             }
                             lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                             throw lastError
@@ -724,10 +751,29 @@ async function* sendRequestSseStreaming(
 
                         const parsedDelay = parseRetryDelay(errorText, response.headers.get("retry-after") || undefined)
                         const waitMs = Math.min(parsedDelay ?? 2000, MAX_NON_QUOTA_429_WAIT_MS)
-                        await new Promise(resolve => setTimeout(resolve, waitMs))
-                        lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
-                        retrySameAccount = true
-                        break
+                        if (nonQuota429Count < MAX_NON_QUOTA_429_RETRIES) {
+                            await new Promise(resolve => setTimeout(resolve, waitMs))
+                            nonQuota429Count += 1
+                            lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
+                            retryAttempt = true
+                            break
+                        }
+                        const cooldownMs = Math.max(waitMs, NON_QUOTA_429_COOLDOWN_MS)
+                        accountManager.markRateLimited(currentAccountId, cooldownMs)
+                        if (allowRotation && accountManager.count() > 1) {
+                            const next = await accountManager.getNextAvailableAccount(true)
+                            if (next && next.accountId !== currentAccountId) {
+                                currentAccessToken = next.accessToken
+                                currentAccountId = next.accountId
+                                antigravityRequest.project = next.projectId
+                                nonQuota429Count = 0
+                                retryAttempt = true
+                                break
+                            }
+                        }
+                        const upstream = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
+                        ;(upstream as any).retryable = true
+                        throw upstream
                     }
                     if (shouldTryNextEndpoint(response.status)) {
                         lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
@@ -736,7 +782,7 @@ async function* sendRequestSseStreaming(
                     throw new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                 }
 
-                if (accountId) accountManager.markSuccess(accountId)
+                if (currentAccountId) accountManager.markSuccess(currentAccountId)
 
                 const reader = response.body?.getReader()
                 if (!reader) {
@@ -824,8 +870,8 @@ async function* sendRequestSseStreaming(
 
                 // 成功完成 - 在 return 之前记录日志
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-                const account = accountId ? await accountManager.getAccountById(accountId) : null
-                const accountPart = account?.email ? ` >> ${account.email}` : (accountId ? ` >> ${accountId}` : "")
+                const account = currentAccountId ? await accountManager.getAccountById(currentAccountId) : null
+                const accountPart = account?.email ? ` >> ${account.email}` : (currentAccountId ? ` >> ${currentAccountId}` : "")
                 console.log(`\x1b[32m[${formatLogTime()}] 200: from ${modelName || "unknown"} > Antigravity${accountPart} (${elapsed}s)\x1b[0m`)
                 return
 
@@ -841,7 +887,7 @@ async function* sendRequestSseStreaming(
                 continue
             }
         }
-        if (!retrySameAccount) {
+        if (!retryAttempt) {
             break
         }
     }
@@ -1026,6 +1072,7 @@ export async function* createChatCompletionStreamWithOptions(
             antigravityRequest,
             accessToken,
             accountId,
+            options.allowRotation ?? true,
             request.model
         )
 
