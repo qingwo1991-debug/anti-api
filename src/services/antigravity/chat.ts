@@ -707,8 +707,8 @@ async function* sendRequestSseStreaming(
     modelName?: string
 ): AsyncGenerator<string, void, unknown> {
     const startTime = Date.now()
-    const READ_TIMEOUT_MS = 180000  // 每次读取最多等待 180 秒
-    const IDLE_TIMEOUT_MS = 300000  // 超过 300 秒没有有效 data 则中断
+    const IDLE_TIMEOUT_MS = 900000  // 超过 15 分钟无数据则中断
+    const IDLE_CHECK_MS = 5000
     let lastError: UpstreamError | null = null
     let currentAccessToken = accessToken
     let currentAccountId = accountId
@@ -722,7 +722,9 @@ async function* sendRequestSseStreaming(
             const url = baseUrl + endpoint + "?alt=sse"
 
             let hasYielded = false
-            let lastYieldAt = Date.now()
+            let lastChunkAt = Date.now()
+            let idleTimedOut = false
+            const idleController = new AbortController()
 
             try {
                 const response = await fetchWithTimeout(url, {
@@ -734,6 +736,7 @@ async function* sendRequestSseStreaming(
                         "Accept": "text/event-stream",
                     },
                     body: JSON.stringify(antigravityRequest),
+                    signal: idleController.signal,
                 }, FETCH_TIMEOUT_MS)
 
                 if (!response.ok) {
@@ -791,27 +794,32 @@ async function* sendRequestSseStreaming(
 
                 const decoder = new TextDecoder()
                 let buffer = ""
+                const idleTimer = setInterval(() => {
+                    if (Date.now() - lastChunkAt > IDLE_TIMEOUT_MS) {
+                        idleTimedOut = true
+                        idleController.abort()
+                    }
+                }, IDLE_CHECK_MS)
 
                 try {
                     while (true) {
-                        // 🆕 添加读取超时保护
-                        const readPromise = reader.read()
-                        const timeoutPromise = new Promise<never>((_, reject) => {
-                            setTimeout(() => reject(new Error("Stream read timeout")), READ_TIMEOUT_MS)
-                        })
-
                         let result: any
                         try {
-                            result = await Promise.race([readPromise, timeoutPromise])
+                            result = await reader.read()
                         } catch (readError) {
-                            // 超时或网络错误
+                            if (idleTimedOut) {
+                                throw new Error("Stream idle timeout")
+                            }
                             consola.warn("[SSE Streaming] Read error:", readError)
-                            break
+                            throw readError
                         }
 
                         const { done, value } = result
                         if (done) break
 
+                        if (value && value.length > 0) {
+                            lastChunkAt = Date.now()
+                        }
                         buffer += decoder.decode(value, { stream: true })
 
                         // Parse SSE by event blocks to handle multi-line data payloads
@@ -821,7 +829,6 @@ async function* sendRequestSseStreaming(
                         for (const event of events) {
                             const data = extractSseEventData(event)
                             if (!data) continue
-                            lastYieldAt = Date.now()
 
                             const trimmed = data.trim()
                             if (!trimmed || trimmed === "[DONE]") continue
@@ -833,10 +840,6 @@ async function* sendRequestSseStreaming(
                             } catch {
                                 // Ignore non-JSON payloads
                             }
-                        }
-
-                        if (Date.now() - lastYieldAt > IDLE_TIMEOUT_MS) {
-                            throw new Error("Stream idle timeout")
                         }
                     }
 
@@ -861,6 +864,7 @@ async function* sendRequestSseStreaming(
                     }
 
                 } finally {
+                    clearInterval(idleTimer)
                     try {
                         reader.releaseLock()
                     } catch {

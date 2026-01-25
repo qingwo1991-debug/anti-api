@@ -632,15 +632,18 @@
             const domain = email.substring(atIndex + 1);
             const dotIndex = domain.lastIndexOf('.');
 
+            // Mask local part: first 2 + ** + last 2
             let maskedLocal;
             if (local.length <= 4) {
-                maskedLocal = local[0] + '*'.repeat(local.length - 1);
+                maskedLocal = local[0] + '**' + (local.length > 1 ? local[local.length - 1] : '');
             } else {
-                maskedLocal = local.substring(0, 2) + '*'.repeat(local.length - 4) + local.substring(local.length - 2);
+                maskedLocal = local.substring(0, 2) + '**' + local.substring(local.length - 2);
             }
 
+            // Mask domain: first letter + ** + extension (e.g., g**.com)
             const ext = dotIndex >= 0 ? domain.substring(dotIndex) : '';
-            const maskedDomain = '*'.repeat(5) + ext;
+            const domainName = dotIndex >= 0 ? domain.substring(0, dotIndex) : domain;
+            const maskedDomain = (domainName.length > 0 ? domainName[0] : '') + '**' + ext;
 
             return maskedLocal + '@' + maskedDomain;
         }

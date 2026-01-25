@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
-import { homedir } from "os"
 import consola from "consola"
+import { getDataDir } from "~/lib/data-dir"
 
-const USAGE_DIR = join(homedir(), ".anti-api")
+const USAGE_DIR = getDataDir()
 const USAGE_FILE = join(USAGE_DIR, "usage.json")
 
 // Pricing per million tokens (USD)
@@ -67,6 +67,9 @@ function saveUsage(): void {
     if (!isDirty) return
     try {
         usageCache.lastUpdated = new Date().toISOString()
+        if (!existsSync(USAGE_DIR)) {
+            mkdirSync(USAGE_DIR, { recursive: true })
+        }
         writeFileSync(USAGE_FILE, JSON.stringify(usageCache, null, 2))
         isDirty = false
     } catch (e) {
@@ -158,6 +161,7 @@ function calculateCost(model: string, usage: ModelUsage): { inputCost: number; o
 // Get usage statistics
 export function getUsage(): {
     lastUpdated: string
+    today: string
     models: Array<{
         model: string
         input: number
@@ -188,6 +192,7 @@ export function getUsage(): {
 
     return {
         lastUpdated: usageCache.lastUpdated,
+        today: getTodayString(),
         models,
         totalCost: Math.round(totalCost * 100) / 100,
         daily: usageCache.daily.map(d => ({

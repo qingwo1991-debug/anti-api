@@ -3,12 +3,11 @@
  * Stores user preferences in a JSON file
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "fs"
-import { join, dirname } from "path"
-import { homedir } from "os"
+import { existsSync, readFileSync, writeFileSync, renameSync, rmSync } from "fs"
+import { join } from "path"
+import { ensureDataDir, getDataDir } from "~/lib/data-dir"
 
-const HOME_DIR = process.env.HOME || process.env.USERPROFILE || homedir()
-const SETTINGS_DIR = join(HOME_DIR, ".anti-api")
+const SETTINGS_DIR = getDataDir()
 const SETTINGS_FILE = join(SETTINGS_DIR, "settings.json")
 
 export interface AppSettings {
@@ -21,6 +20,7 @@ export interface AppSettings {
     compactLayout: boolean
     trackUsage: boolean
     optimizeQuotaSort: boolean
+    captureLogs: boolean
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -33,12 +33,11 @@ const DEFAULT_SETTINGS: AppSettings = {
     compactLayout: false,
     trackUsage: true,
     optimizeQuotaSort: false,
+    captureLogs: false,
 }
 
 function ensureSettingsDir(): void {
-    if (!existsSync(SETTINGS_DIR)) {
-        mkdirSync(SETTINGS_DIR, { recursive: true })
-    }
+    ensureDataDir()
 }
 
 export function loadSettings(): AppSettings {

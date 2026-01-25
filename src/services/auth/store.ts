@@ -3,9 +3,9 @@ import { join } from "path"
 import consola from "consola"
 import { parseRetryDelay } from "~/lib/retry"
 import type { AuthProvider, ProviderAccount, ProviderAccountSummary } from "./types"
+import { getDataDir } from "~/lib/data-dir"
 
-const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "."
-const AUTH_DIR = join(HOME_DIR, ".anti-api", "auth")
+const AUTH_DIR = join(getDataDir(), "auth")
 
 interface StoredAuthFile {
     id: string

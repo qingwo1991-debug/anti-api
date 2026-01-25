@@ -13,6 +13,7 @@ import { openaiRoutes } from "./routes/openai/route"
 import { authRouter } from "./routes/auth/route"
 import { remoteRouter } from "./routes/remote/route"
 import { routingRouter } from "./routes/routing/route"
+import { logsRouter } from "./routes/logs/route"
 import { AVAILABLE_MODELS } from "./lib/config"
 import { getAggregatedQuota } from "./services/quota-aggregator"
 import { initAuth, isAuthenticated } from "./services/antigravity/login"
@@ -24,9 +25,12 @@ import { pingAccount } from "./services/ping"
 import { summarizeUpstreamError, UpstreamError } from "./lib/error"
 
 import { getRequestLogContext } from "./lib/logger"
+import { initLogCapture, setLogCaptureEnabled } from "./lib/log-buffer"
 
 export const server = new Hono()
 
+initLogCapture()
+setLogCaptureEnabled(loadSettings().captureLogs)
 consola.level = 0
 
 // 中间件 - 请求日志 (只记录重要请求)
@@ -80,6 +84,9 @@ server.route("/remote", remoteRouter)
 // Routing 配置路由
 server.route("/routing", routingRouter)
 
+// Logs
+server.route("/logs", logsRouter)
+
 // Remote 控制页面 - HTML
 server.get("/remote-panel", async (c) => {
     try {
@@ -111,6 +118,7 @@ server.get("/settings", (c) => {
 server.post("/settings", async (c) => {
     const body = await c.req.json()
     const updated = saveSettings(body)
+    setLogCaptureEnabled(updated.captureLogs)
     return c.json(updated)
 })
 

@@ -72,6 +72,28 @@
             border: 1px solid rgba(55, 65, 81, 0.5);
         }
 
+        .provider-logo {
+            width: 18px;
+            height: 18px;
+            display: block;
+            flex-shrink: 0;
+        }
+
+        .provider-logo--codex {
+            color: var(--white-glow);
+        }
+
+        .provider-logo--copilot {
+            color: #9ca3af;
+        }
+
+        .provider-logo--fallback {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            color: #6b7280;
+        }
+
         /* Antigravity - 蓝紫色背景光晕 */
         .card-3d[data-provider="antigravity"].active .card-inner {
             background: rgba(71, 150, 227, 0.16);
@@ -217,8 +239,8 @@
         }
 
         .codex-bar {
-            background: linear-gradient(90deg, #ffffff, #d9d9d9);
-            box-shadow: 0 0 12px rgba(255, 255, 255, 0.7);
+            background: linear-gradient(90deg, #e6e6e6, #bdbdbd);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.35);
         }
 
         .copilot-bar {
@@ -318,6 +340,10 @@
                 class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
                 Routing <span class="text-[10px] text-gray-500">(Beta)</span>
             </button>
+            <button onclick="switchTab('logs')" id="tab-logs"
+                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
+                Logs
+            </button>
             <button onclick="switchTab('settings')" id="tab-settings"
                 class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
                 Settings
@@ -359,7 +385,7 @@
             <!-- Quota Grid -->
             <div id="quota-grid" class="space-y-6">
                 <!-- Loading placeholder -->
-                <div class="grid grid-cols-3 gap-4">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     <div class="card-3d">
                         <div class="card-inner rounded-lg p-4 animate-pulse">
                             <div class="h-3 bg-gray-800 rounded w-1/2 mb-3"></div>
@@ -439,6 +465,50 @@
         <div id="tab-content-routing" class="tab-content hidden">
             <iframe id="routing-iframe" class="w-full border-0 bg-black"
                 style="height: calc(100vh - 160px); min-height: 500px;"></iframe>
+        </div>
+
+        <!-- ==================== LOGS TAB ==================== -->
+        <div id="tab-content-logs" class="tab-content hidden">
+            <div class="mb-6 flex items-start justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-300">Logs</h1>
+                    <p class="text-gray-500 text-sm font-bold mt-1">Live server output (recent lines only)</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span id="logs-status" class="text-xs text-gray-500">Disconnected</span>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3 mb-4">
+                <div class="refresh-btn inline-block">
+                    <button onclick="refreshLogs()" id="logs-refresh"
+                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                        Reload
+                    </button>
+                </div>
+                <div class="refresh-btn inline-block">
+                    <button onclick="toggleLogsPause()" id="logs-toggle"
+                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                        Pause
+                    </button>
+                </div>
+                <div class="refresh-btn inline-block">
+                    <button onclick="clearLogView()" id="logs-clear"
+                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                        Clear
+                    </button>
+                </div>
+                <label class="flex items-center gap-2 text-xs text-gray-500">
+                    <input type="checkbox" id="logs-follow" checked>
+                    Follow
+                </label>
+            </div>
+
+            <div class="rounded-xl border border-gray-800 bg-black/40 p-4">
+                <div id="log-view"
+                    class="h-[560px] overflow-auto font-mono text-xs text-gray-300 leading-6 whitespace-pre-wrap">
+                </div>
+            </div>
         </div>
 
         <!-- ==================== SETTINGS TAB ==================== -->
@@ -525,6 +595,16 @@
                             <div class="text-gray-500 text-xs mt-0.5">Estimate cost based on token consumption</div>
                         </div>
                         <input type="checkbox" id="setting-track-usage" class="toggle-switch" checked>
+                    </label>
+
+                    <!-- Capture Logs -->
+                    <label
+                        class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
+                        <div>
+                            <div class="text-gray-200 font-medium">Capture Logs</div>
+                            <div class="text-gray-500 text-xs mt-0.5">Store recent console logs for dashboard</div>
+                        </div>
+                        <input type="checkbox" id="setting-capture-logs" class="toggle-switch">
                     </label>
 
                     <!-- Optimize Quota Sorting -->
@@ -646,6 +726,12 @@
         let currentTab = 'quota';
         let remoteLoaded = false;
         let routingLoaded = false;
+        let logsLoaded = false;
+        let logsSource = null;
+        let logsPaused = false;
+        let logsFollow = true;
+        let lastLogId = 0;
+        const maxLogLines = 1000;
         let lastRefreshTime = null;
         let autoRefreshInterval = null;
 
@@ -660,7 +746,8 @@
             privacyMode: false,
             compactLayout: false,
             trackUsage: true,
-            optimizeQuotaSort: false
+            optimizeQuotaSort: false,
+            captureLogs: false
         };
 
         async function loadSettings() {
@@ -684,7 +771,8 @@
                 privacyMode: document.getElementById('setting-privacy-mode').checked,
                 compactLayout: document.getElementById('setting-compact-layout').checked,
                 trackUsage: document.getElementById('setting-track-usage').checked,
-                optimizeQuotaSort: document.getElementById('setting-optimize-quota-sort').checked
+                optimizeQuotaSort: document.getElementById('setting-optimize-quota-sort').checked,
+                captureLogs: document.getElementById('setting-capture-logs').checked
             };
             try {
                 const res = await fetch(`${API_BASE}/settings`, {
@@ -702,6 +790,12 @@
                     window._compactLayout = settings.compactLayout;
                     // Re-render quota to apply changes
                     fetchQuota(false);
+                    if (currentTab === 'logs') {
+                        refreshLogs();
+                        if (!logsPaused) {
+                            startLogStream();
+                        }
+                    }
                 } else {
                     showSettingsToast('Failed to save settings', true);
                 }
@@ -721,6 +815,7 @@
             document.getElementById('setting-compact-layout').checked = false;
             document.getElementById('setting-track-usage').checked = true;
             document.getElementById('setting-optimize-quota-sort').checked = false;
+            document.getElementById('setting-capture-logs').checked = false;
 
             // Save defaults to server
             await saveAllSettings();
@@ -737,6 +832,7 @@
             document.getElementById('setting-compact-layout').checked = true;
             document.getElementById('setting-track-usage').checked = true;
             document.getElementById('setting-optimize-quota-sort').checked = true;
+            document.getElementById('setting-capture-logs').checked = true;
 
             await saveAllSettings();
             showSettingsToast('All settings enabled');
@@ -752,6 +848,7 @@
             document.getElementById('setting-compact-layout').checked = false;
             document.getElementById('setting-track-usage').checked = false;
             document.getElementById('setting-optimize-quota-sort').checked = false;
+            document.getElementById('setting-capture-logs').checked = false;
 
             await saveAllSettings();
             showSettingsToast('All settings disabled');
@@ -799,17 +896,18 @@
             const domain = email.substring(atIndex + 1);
             const dotIndex = domain.lastIndexOf('.');
 
-            // Mask local part: keep first 2 and last 2 chars
+            // Mask local part: first 2 + ** + last 2
             let maskedLocal;
             if (local.length <= 4) {
-                maskedLocal = local[0] + '*'.repeat(local.length - 1);
+                maskedLocal = local[0] + '**' + (local.length > 1 ? local[local.length - 1] : '');
             } else {
-                maskedLocal = local.substring(0, 2) + '*'.repeat(local.length - 4) + local.substring(local.length - 2);
+                maskedLocal = local.substring(0, 2) + '**' + local.substring(local.length - 2);
             }
 
-            // Mask domain: keep only extension (after last dot)
+            // Mask domain: first letter + ** + extension (e.g., g**.com)
             const ext = dotIndex >= 0 ? domain.substring(dotIndex) : '';
-            const maskedDomain = '*'.repeat(5) + ext;
+            const domainName = dotIndex >= 0 ? domain.substring(0, dotIndex) : domain;
+            const maskedDomain = (domainName.length > 0 ? domainName[0] : '') + '**' + ext;
 
             return maskedLocal + '@' + maskedDomain;
         }
@@ -833,6 +931,7 @@
             document.getElementById('setting-compact-layout').checked = settings.compactLayout;
             document.getElementById('setting-track-usage').checked = settings.trackUsage;
             document.getElementById('setting-optimize-quota-sort').checked = settings.optimizeQuotaSort;
+            document.getElementById('setting-capture-logs').checked = settings.captureLogs;
             window._privacyMode = settings.privacyMode;
             window._compactLayout = settings.compactLayout;
             window._trackUsage = settings.trackUsage;
@@ -949,6 +1048,12 @@
             if (tabName === 'usage') {
                 fetchUsageData(false);
             }
+
+            if (tabName === 'logs') {
+                initLogs();
+            } else {
+                stopLogStream();
+            }
         }
 
         function loadRemoteContent() {
@@ -965,6 +1070,143 @@
                 iframe.src = '/routing';
             }
             routingLoaded = true;
+        }
+
+        function setLogsStatus(message, isError = false) {
+            const status = document.getElementById('logs-status');
+            if (!status) return;
+            status.textContent = message;
+            status.classList.toggle('text-red-400', isError);
+            status.classList.toggle('text-gray-500', !isError);
+        }
+
+        function appendLogEntry(entry) {
+            const view = document.getElementById('log-view');
+            if (!view) return;
+            const line = entry?.line || " ";
+            const row = document.createElement('div');
+            row.textContent = line === "" ? " " : line;
+            view.appendChild(row);
+            while (view.childNodes.length > maxLogLines) {
+                view.removeChild(view.firstChild);
+            }
+            if (logsFollow) {
+                view.scrollTop = view.scrollHeight;
+            }
+        }
+
+        function renderLogEntries(entries) {
+            const view = document.getElementById('log-view');
+            if (!view) return;
+            view.innerHTML = '';
+            entries.forEach(entry => appendLogEntry(entry));
+            if (logsFollow) {
+                view.scrollTop = view.scrollHeight;
+            }
+        }
+
+        async function refreshLogs() {
+            setLogsStatus('Refreshing...');
+            try {
+                const res = await fetch(`${API_BASE}/logs?limit=${maxLogLines}`);
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                if (!data.enabled) {
+                    renderLogEntries([{ line: 'Log capture is disabled. Enable it in Settings.' }]);
+                    lastLogId = data.lastId || lastLogId;
+                    setLogsStatus('Disabled');
+                    stopLogStream();
+                    return;
+                }
+                renderLogEntries(data.entries || []);
+                lastLogId = data.lastId || lastLogId;
+                setLogsStatus(logsPaused ? 'Paused' : 'Connected');
+            } catch (error) {
+                setLogsStatus(`Failed: ${error.message}`, true);
+            }
+        }
+
+        function startLogStream() {
+            if (logsPaused) return;
+            stopLogStream();
+            setLogsStatus('Connecting...');
+            const source = new EventSource(`${API_BASE}/logs/stream?since=${lastLogId}`);
+            logsSource = source;
+
+            source.addEventListener('disabled', () => {
+                setLogsStatus('Disabled');
+                renderLogEntries([{ line: 'Log capture is disabled. Enable it in Settings.' }]);
+                stopLogStream();
+            });
+
+            source.addEventListener('log', (event) => {
+                try {
+                    const entry = JSON.parse(event.data);
+                    lastLogId = entry.id || lastLogId;
+                    appendLogEntry(entry);
+                } catch (error) {
+                    // ignore parsing errors
+                }
+            });
+
+            source.onopen = () => {
+                setLogsStatus('Connected');
+            };
+
+            source.onerror = () => {
+                setLogsStatus('Disconnected', true);
+                stopLogStream();
+                if (!logsPaused && currentTab === 'logs') {
+                    setTimeout(() => startLogStream(), 2000);
+                }
+            };
+        }
+
+        function stopLogStream() {
+            if (logsSource) {
+                logsSource.close();
+                logsSource = null;
+            }
+        }
+
+        function toggleLogsPause() {
+            logsPaused = !logsPaused;
+            const toggleBtn = document.getElementById('logs-toggle');
+            if (toggleBtn) {
+                toggleBtn.textContent = logsPaused ? 'Resume' : 'Pause';
+            }
+            if (logsPaused) {
+                stopLogStream();
+                setLogsStatus('Paused');
+            } else {
+                startLogStream();
+            }
+        }
+
+        function clearLogView() {
+            const view = document.getElementById('log-view');
+            if (view) {
+                view.innerHTML = '';
+            }
+        }
+
+        function initLogs() {
+            if (!logsLoaded) {
+                logsLoaded = true;
+                const followToggle = document.getElementById('logs-follow');
+                if (followToggle) {
+                    logsFollow = followToggle.checked;
+                    followToggle.addEventListener('change', () => {
+                        logsFollow = followToggle.checked;
+                    });
+                }
+                refreshLogs();
+            }
+            if (!logsPaused) {
+                startLogStream();
+            }
         }
 
         // 3D 倾斜效果
@@ -1118,6 +1360,68 @@
             }
         }
 
+        function hashId(input) {
+            let hash = 0;
+            const str = String(input || '');
+            for (let i = 0; i < str.length; i++) {
+                hash = ((hash << 5) - hash) + str.charCodeAt(i);
+                hash |= 0;
+            }
+            return Math.abs(hash).toString(16);
+        }
+
+        function getProviderLogo(provider, cardId) {
+            const uid = hashId(cardId || provider);
+            if (provider === 'antigravity') {
+                const aId = `gemini-a-${uid}`;
+                const bId = `gemini-b-${uid}`;
+                const cId = `gemini-c-${uid}`;
+                const geminiPath = 'M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z';
+                return `
+                    <svg class="provider-logo" viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg" aria-label="Gemini" role="img">
+                        <title>Gemini</title>
+                        <path d="${geminiPath}" fill="#3186FF"></path>
+                        <path d="${geminiPath}" fill="url(#${aId})"></path>
+                        <path d="${geminiPath}" fill="url(#${bId})"></path>
+                        <path d="${geminiPath}" fill="url(#${cId})"></path>
+                        <defs>
+                            <linearGradient gradientUnits="userSpaceOnUse" id="${aId}" x1="7" x2="11" y1="15.5" y2="12">
+                                <stop stop-color="#08B962"></stop>
+                                <stop offset="1" stop-color="#08B962" stop-opacity="0"></stop>
+                            </linearGradient>
+                            <linearGradient gradientUnits="userSpaceOnUse" id="${bId}" x1="8" x2="11.5" y1="5.5" y2="11">
+                                <stop stop-color="#F94543"></stop>
+                                <stop offset="1" stop-color="#F94543" stop-opacity="0"></stop>
+                            </linearGradient>
+                            <linearGradient gradientUnits="userSpaceOnUse" id="${cId}" x1="3.5" x2="17.5" y1="13.5" y2="12">
+                                <stop stop-color="#FABC12"></stop>
+                                <stop offset=".46" stop-color="#FABC12" stop-opacity="0"></stop>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                `;
+            }
+            if (provider === 'codex') {
+                const openAiPath = 'M21.55 10.004a5.416 5.416 0 00-.478-4.501c-1.217-2.09-3.662-3.166-6.05-2.66A5.59 5.59 0 0010.831 1C8.39.995 6.224 2.546 5.473 4.838A5.553 5.553 0 001.76 7.496a5.487 5.487 0 00.691 6.5 5.416 5.416 0 00.477 4.502c1.217 2.09 3.662 3.165 6.05 2.66A5.586 5.586 0 0013.168 23c2.443.006 4.61-1.546 5.361-3.84a5.553 5.553 0 003.715-2.66 5.488 5.488 0 00-.693-6.497v.001zm-8.381 11.558a4.199 4.199 0 01-2.675-.954c.034-.018.093-.05.132-.074l4.44-2.53a.71.71 0 00.364-.623v-6.176l1.877 1.069c.02.01.033.029.036.05v5.115c-.003 2.274-1.87 4.118-4.174 4.123zM4.192 17.78a4.059 4.059 0 01-.498-2.763c.032.02.09.055.131.078l4.44 2.53c.225.13.504.13.73 0l5.42-3.088v2.138a.068.068 0 01-.027.057L9.9 19.288c-1.999 1.136-4.552.46-5.707-1.51h-.001zM3.023 8.216A4.15 4.15 0 015.198 6.41l-.002.151v5.06a.711.711 0 00.364.624l5.42 3.087-1.876 1.07a.067.067 0 01-.063.005l-4.489-2.559c-1.995-1.14-2.679-3.658-1.53-5.63h.001zm15.417 3.54l-5.42-3.088L14.896 7.6a.067.067 0 01.063-.006l4.489 2.557c1.998 1.14 2.683 3.662 1.529 5.633a4.163 4.163 0 01-2.174 1.807V12.38a.71.71 0 00-.363-.623zm1.867-2.773a6.04 6.04 0 00-.132-.078l-4.44-2.53a.731.731 0 00-.729 0l-5.42 3.088V7.325a.068.068 0 01.027-.057L14.1 4.713c2-1.137 4.555-.46 5.707 1.513.487.833.664 1.809.499 2.757h.001zm-11.741 3.81l-1.877-1.068a.065.065 0 01-.036-.051V6.559c.001-2.277 1.873-4.122 4.181-4.12.976 0 1.92.338 2.671.954-.034.018-.092.05-.131.073l-4.44 2.53a.71.71 0 00-.365.623l-.003 6.173v.002zm1.02-2.168L12 9.25l2.414 1.375v2.75L12 14.75l-2.415-1.375v-2.75z';
+                return `
+                    <svg class="provider-logo provider-logo--codex" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" fill-rule="evenodd" xmlns="http://www.w3.org/2000/svg" aria-label="OpenAI" role="img">
+                        <title>OpenAI</title>
+                        <path d="${openAiPath}"></path>
+                    </svg>
+                `;
+            }
+            if (provider === 'copilot') {
+                const copilotPath = 'M19.245 5.364c1.322 1.36 1.877 3.216 2.11 5.817.622 0 1.2.135 1.592.654l.73.964c.21.278.323.61.323.955v2.62c0 .339-.173.669-.453.868C20.239 19.602 16.157 21.5 12 21.5c-4.6 0-9.205-2.583-11.547-4.258-.28-.2-.452-.53-.453-.868v-2.62c0-.345.113-.679.321-.956l.73-.963c.392-.517.974-.654 1.593-.654l.029-.297c.25-2.446.81-4.213 2.082-5.52 2.461-2.54 5.71-2.851 7.146-2.864h.198c1.436.013 4.685.323 7.146 2.864zm-7.244 4.328c-.284 0-.613.016-.962.05-.123.447-.305.85-.57 1.108-1.05 1.023-2.316 1.18-2.994 1.18-.638 0-1.306-.13-1.851-.464-.516.165-1.012.403-1.044.996a65.882 65.882 0 00-.063 2.884l-.002.48c-.002.563-.005 1.126-.013 1.69.002.326.204.63.51.765 2.482 1.102 4.83 1.657 6.99 1.657 2.156 0 4.504-.555 6.985-1.657a.854.854 0 00.51-.766c.03-1.682.006-3.372-.076-5.053-.031-.596-.528-.83-1.046-.996-.546.333-1.212.464-1.85.464-.677 0-1.942-.157-2.993-1.18-.266-.258-.447-.661-.57-1.108-.32-.032-.64-.049-.96-.05zm-2.525 4.013c.539 0 .976.426.976.95v1.753c0 .525-.437.95-.976.95a.964.964 0 01-.976-.95v-1.752c0-.525.437-.951.976-.951zm5 0c.539 0 .976.426.976.95v1.753c0 .525-.437.95-.976.95a.964.964 0 01-.976-.95v-1.752c0-.525.437-.951.976-.951zM7.635 5.087c-1.05.102-1.935.438-2.385.906-.975 1.037-.765 3.668-.21 4.224.405.394 1.17.657 1.995.657h.09c.649-.013 1.785-.176 2.73-1.11.435-.41.705-1.433.675-2.47-.03-.834-.27-1.52-.63-1.813-.39-.336-1.275-.482-2.265-.394zm6.465.394c-.36.292-.6.98-.63 1.813-.03 1.037.24 2.06.675 2.47.968.957 2.136 1.104 2.776 1.11h.044c.825 0 1.59-.263 1.995-.657.555-.556.765-3.187-.21-4.224-.45-.468-1.335-.804-2.385-.906-.99-.088-1.875.058-2.265.394zM12 7.615c-.24 0-.525.015-.84.044.03.16.045.336.06.526l-.001.159a2.94 2.94 0 01-.014.25c.225-.022.425-.027.612-.028h.366c.187 0 .387.006.612.028-.015-.146-.015-.277-.015-.409.015-.19.03-.365.06-.526a9.29 9.29 0 00-.84-.044z';
+                return `
+                    <svg class="provider-logo provider-logo--copilot" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" fill-rule="evenodd" xmlns="http://www.w3.org/2000/svg" aria-label="Github Copilot" role="img">
+                        <title>Github Copilot</title>
+                        <path d="${copilotPath}"></path>
+                    </svg>
+                `;
+            }
+            return `<span class="provider-logo--fallback">${provider}</span>`;
+        }
+
         function copyModelId(modelId) {
             navigator.clipboard.writeText(modelId);
             showToast(`Copied: ${modelId}`);
@@ -1173,7 +1477,7 @@
                     <div class="space-y-1">
                         <div class="flex items-center justify-between text-xs text-gray-400">
                             <span class="uppercase tracking-widest">${bar.label}</span>
-                            <span class="font-bold text-gray-300">${percentage}%</span>
+                            <span class="font-bold text-gray-400">${percentage}%</span>
                         </div>
                         <div class="h-2 bg-gray-900 rounded-full overflow-hidden">
                             <div class="progress-bar h-full rounded-full transition-all ${provider}-bar"
@@ -1187,14 +1491,17 @@
             // Apply privacy masking based on provider
             const displayName = account.displayName || account.accountId;
             const maskedName = provider === 'copilot' ? maskUsername(displayName) : maskEmail(displayName);
+            const providerLogo = getProviderLogo(provider, cardId);
 
             return `
                 <div class="card-3d" data-provider="${provider}" data-card-id="${cardId}" data-account-id="${account.accountId}" data-display-name="${displayName}">
                     <div class="card-inner rounded-2xl p-5">
                         <div class="flex items-center justify-between mb-4">
-                            <div class="text-sm font-bold text-gray-200">${maskedName}</div>
                             <div class="flex items-center gap-2">
-                                <span class="text-[10px] text-gray-500 uppercase tracking-[0.2em]">${provider}</span>
+                                ${providerLogo}
+                                <div class="text-sm font-bold text-gray-300">${maskedName}</div>
+                            </div>
+                            <div class="flex items-center gap-2">
                                 <button onclick="deleteAccount('${account.accountId}', '${displayName}')" 
                                         class="text-gray-600 hover:text-red-500 transition-colors text-xs px-1" title="Remove account">✕</button>
                             </div>
@@ -1297,7 +1604,7 @@
                         </div>
                     `;
                 } else {
-                    grid.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    grid.innerHTML = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                         ${accounts.map(renderAccountCard).join('')}
                     </div>`;
                 }
@@ -1742,9 +2049,11 @@
             document.getElementById('usage-total-large').textContent = `$${data.totalCost.toFixed(2)}`;
 
             // Calculate and display today's cost (use local date to match backend)
-            const now = new Date();
-            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-            const todayEntry = (data.daily || []).find(d => d.date === today) || {};
+            const todayKey = data.today || (() => {
+                const now = new Date();
+                return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            })();
+            const todayEntry = (data.daily || []).find(d => d.date === todayKey) || {};
             const todayCost = todayEntry.cost || 0;
             const todayCostEl = document.getElementById('usage-today-cost');
             if (todayCostEl) {

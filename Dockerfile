@@ -1,16 +1,25 @@
-# syntax=docker/dockerfile:1
-FROM oven/bun:1.1.38
+ARG BUN_IMAGE=ghcr.io/oven-sh/bun:1.1.38
+FROM ${BUN_IMAGE}
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ \
+    && apt-get install -y --no-install-recommends python3 make g++ curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile
 
 COPY . .
+
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    if [ "$arch" = "x86_64" ]; then ngrok_arch="amd64"; \
+    elif [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then ngrok_arch="arm64"; \
+    else echo "Unsupported arch: $arch" >&2; exit 1; fi; \
+    curl -fsSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${ngrok_arch}.tgz" -o /tmp/ngrok.tgz; \
+    tar -xzf /tmp/ngrok.tgz -C /usr/local/bin; \
+    rm /tmp/ngrok.tgz
 
 ENV NODE_ENV=production
 ENV HOME=/app/data

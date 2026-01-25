@@ -1,0 +1,5 @@
+services:
+  anti-api:
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public

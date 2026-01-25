@@ -4,7 +4,7 @@
  */
 
 import { state } from "~/lib/state"
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { existsSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
 import consola from "consola"
 import {
@@ -17,8 +17,10 @@ import {
     refreshAccessToken,
 } from "./oauth"
 import { generateMockProjectId } from "./project-id"
+import { ensureDataDir, getDataDir, getLegacyProjectDataDir } from "~/lib/data-dir"
 
-const AUTH_FILE = join(process.cwd(), "data", "auth.json")
+const AUTH_FILE = join(getDataDir(), "auth.json")
+const LEGACY_AUTH_FILE = join(getLegacyProjectDataDir(), "auth.json")
 
 interface AuthData {
     accessToken: string
@@ -34,8 +36,9 @@ interface AuthData {
  */
 export function initAuth(): void {
     try {
-        if (existsSync(AUTH_FILE)) {
-            const data = JSON.parse(readFileSync(AUTH_FILE, "utf-8")) as AuthData
+        const source = existsSync(AUTH_FILE) ? AUTH_FILE : (existsSync(LEGACY_AUTH_FILE) ? LEGACY_AUTH_FILE : null)
+        if (source) {
+            const data = JSON.parse(readFileSync(source, "utf-8")) as AuthData
             if (data.accessToken) {
                 state.accessToken = data.accessToken
                 state.antigravityToken = data.accessToken
@@ -44,6 +47,9 @@ export function initAuth(): void {
                 state.userEmail = data.userEmail || null
                 state.userName = data.userName || null
                 state.cloudaicompanionProject = data.projectId || null
+                if (source === LEGACY_AUTH_FILE && !existsSync(AUTH_FILE)) {
+                    saveAuth()
+                }
                 consola.success("Loaded saved authentication")
             }
         }
@@ -57,10 +63,7 @@ export function initAuth(): void {
  */
 export function saveAuth(): void {
     try {
-        const dir = join(process.cwd(), "data")
-        if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true })
-        }
+        ensureDataDir()
 
         const data: AuthData = {
             accessToken: state.accessToken!,
@@ -92,6 +95,9 @@ export function clearAuth(): void {
     try {
         if (existsSync(AUTH_FILE)) {
             writeFileSync(AUTH_FILE, "{}")
+        }
+        if (existsSync(LEGACY_AUTH_FILE)) {
+            writeFileSync(LEGACY_AUTH_FILE, "{}")
         }
     } catch (error) {
         consola.warn("Failed to clear auth file:", error)

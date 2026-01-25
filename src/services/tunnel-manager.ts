@@ -4,11 +4,16 @@
  */
 
 import { spawn, type ChildProcess } from "child_process"
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "fs"
 import { join } from "path"
 import consola from "consola"
+import { ensureDataDir, getDataDir, getLegacyProjectDataDir } from "~/lib/data-dir"
+import { tmpdir } from "os"
 
-const CONFIG_FILE = join(process.cwd(), "data", "remote-config.json")
+const CONFIG_FILE = join(getDataDir(), "remote-config.json")
+const LEGACY_CONFIG_FILE = join(getLegacyProjectDataDir(), "remote-config.json")
+const NGROK_DIR = join(getDataDir(), "bin")
+const NGROK_BIN = join(NGROK_DIR, "ngrok")
 
 interface TunnelConfig {
     ngrokAuthtoken?: string
@@ -52,8 +57,13 @@ const ngrokStability = {
  */
 function loadConfig(): TunnelConfig {
     try {
-        if (existsSync(CONFIG_FILE)) {
-            return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"))
+        const source = existsSync(CONFIG_FILE) ? CONFIG_FILE : (existsSync(LEGACY_CONFIG_FILE) ? LEGACY_CONFIG_FILE : null)
+        if (source) {
+            const config = JSON.parse(readFileSync(source, "utf-8")) as TunnelConfig
+            if (source === LEGACY_CONFIG_FILE && !existsSync(CONFIG_FILE)) {
+                saveConfig(config)
+            }
+            return config
         }
     } catch (e) { }
     return {}
@@ -64,14 +74,57 @@ function loadConfig(): TunnelConfig {
  */
 function saveConfig(config: TunnelConfig): void {
     try {
-        const dir = join(process.cwd(), "data")
-        if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true })
-        }
+        ensureDataDir()
         writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
     } catch (e) {
         consola.error("Failed to save config:", e)
     }
+}
+
+function resolveNgrokArch(): string | null {
+    if (process.platform !== "linux") return null
+    if (process.arch === "x64") return "amd64"
+    if (process.arch === "arm64") return "arm64"
+    return null
+}
+
+async function ensureNgrokBinary(): Promise<string> {
+    if (existsSync(NGROK_BIN)) return NGROK_BIN
+
+    const arch = resolveNgrokArch()
+    if (!arch) {
+        throw new Error("ngrok not found; please install ngrok or use a supported platform")
+    }
+
+    ensureDataDir()
+    if (!existsSync(NGROK_DIR)) {
+        mkdirSync(NGROK_DIR, { recursive: true })
+    }
+
+    const url = `https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${arch}.tgz`
+    const response = await fetch(url)
+    if (!response.ok) {
+        throw new Error(`Failed to download ngrok: ${response.status}`)
+    }
+
+    const archivePath = join(tmpdir(), `ngrok-${Date.now()}.tgz`)
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    writeFileSync(archivePath, bytes)
+
+    await new Promise<void>((resolve, reject) => {
+        const proc = spawn("tar", ["-xzf", archivePath, "-C", NGROK_DIR], { stdio: "ignore" })
+        proc.on("close", (code) => {
+            if (code === 0) {
+                resolve()
+            } else {
+                reject(new Error(`Failed to extract ngrok (code ${code})`))
+            }
+        })
+        proc.on("error", reject)
+    })
+
+    chmodSync(NGROK_BIN, 0o755)
+    return NGROK_BIN
 }
 
 /**
@@ -237,9 +290,23 @@ export async function startNgrok(port: number, authtoken?: string): Promise<Tunn
     return new Promise(async (resolve) => {
         const args = ["http", port.toString(), "--authtoken", token, "--log", "stdout"]
 
-        const proc = spawn("ngrok", args, {
-            stdio: ["ignore", "pipe", "pipe"]
-        })
+        let proc: ChildProcess
+        try {
+            proc = spawn("ngrok", args, {
+                stdio: ["ignore", "pipe", "pipe"]
+            })
+        } catch {
+            try {
+                const ngrokPath = await ensureNgrokBinary()
+                proc = spawn(ngrokPath, args, {
+                    stdio: ["ignore", "pipe", "pipe"]
+                })
+            } catch (error) {
+                const message = (error as Error).message || "ngrok spawn failed"
+                safeResolve({ active: false, url: null, pid: null, error: message })
+                return
+            }
+        }
 
         tunnelState.ngrok.process = proc
         ngrokStability.startTime = Date.now()

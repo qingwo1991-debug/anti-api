@@ -21,6 +21,9 @@ import { getSetting } from "./services/settings"
  * 在 Docker/无头环境中静默失败
  */
 function openBrowser(url: string): void {
+    if (process.env.ANTI_API_NO_OPEN === "1") {
+        return
+    }
     const platform = process.platform
     let cmd: string
     let args: string[]
@@ -129,11 +132,15 @@ const start = defineCommand({
         if (getSetting("autoNgrok")) {
             setTimeout(async () => {
                 const { startNgrok } = await import("./services/tunnel-manager")
-                const result = await startNgrok(state.port)
-                if (result.url) {
-                    consola.success(`ngrok tunnel: ${result.url}`)
-                } else if (result.error) {
-                    consola.warn(`ngrok: ${result.error}`)
+                try {
+                    const result = await startNgrok(state.port)
+                    if (result.url) {
+                        consola.success(`ngrok tunnel: ${result.url}`)
+                    } else if (result.error) {
+                        consola.warn(`ngrok: ${result.error}`)
+                    }
+                } catch (error) {
+                    consola.warn(`ngrok: ${(error as Error).message}`)
                 }
             }, 3000)
         }

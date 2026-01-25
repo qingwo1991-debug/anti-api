@@ -14,6 +14,7 @@ import { parseRetryDelay } from "~/lib/retry"
 import { MIN_REQUEST_INTERVAL_MS } from "~/lib/constants"
 import { fetchAntigravityModels, pickResetTime } from "./quota-fetch"
 import { UpstreamError } from "~/lib/error"
+import { getDataDir } from "~/lib/data-dir"
 
 type RateLimitReason =
     | "quota_exhausted"
@@ -157,8 +158,7 @@ class AccountManager {
     private lastCallByAccount = new Map<string, number>()
 
     constructor() {
-        const homeDir = process.env.HOME || process.env.USERPROFILE || "."
-        this.dataFile = path.join(homeDir, ".anti-api", "accounts.json")
+        this.dataFile = path.join(getDataDir(), "accounts.json")
     }
 
     private ensureLoaded(): void {

@@ -4,6 +4,7 @@ import { randomUUID } from "crypto"
 import consola from "consola"
 import type { AuthProvider } from "~/services/auth/types"
 import { isHiddenCodexModel } from "./models"
+import { getDataDir } from "~/lib/data-dir"
 
 export interface RoutingEntry {
     id: string
@@ -47,12 +48,11 @@ export interface RoutingConfig {
     accountRouting?: AccountRoutingConfig
 }
 
-const HOME_DIR = process.env.HOME || process.env.USERPROFILE || "."
-const ROUTING_FILE = join(HOME_DIR, ".anti-api", "routing.json")
+const ROUTING_FILE = join(getDataDir(), "routing.json")
 const CURRENT_VERSION = 2
 
 function ensureDir(): void {
-    const dir = join(HOME_DIR, ".anti-api")
+    const dir = getDataDir()
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true })
     }

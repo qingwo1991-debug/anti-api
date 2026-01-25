@@ -2,7 +2,6 @@ import consola from "consola"
 import https from "https"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
-import { homedir } from "os"
 import { authStore } from "~/services/auth/store"
 import { refreshAccessToken } from "~/services/antigravity/oauth"
 import { fetchAntigravityModels as fetchAntigravityModelsRequest, type AntigravityModelInfo } from "~/services/antigravity/quota-fetch"
@@ -10,6 +9,7 @@ import { refreshCodexAccessToken, refreshCodexAccountIfNeeded } from "~/services
 import { accountManager } from "~/services/antigravity/account-manager"
 import type { ProviderAccount } from "~/services/auth/types"
 import { UpstreamError } from "~/lib/error"
+import { getDataDir } from "~/lib/data-dir"
 
 type ModelInfo = AntigravityModelInfo
 
@@ -35,7 +35,7 @@ type QuotaCacheEntry = {
     updatedAt: string
 }
 
-const QUOTA_CACHE_DIR = join(homedir(), ".anti-api")
+const QUOTA_CACHE_DIR = getDataDir()
 const QUOTA_CACHE_FILE = join(QUOTA_CACHE_DIR, "quota-cache.json")
 let quotaCache = new Map<string, QuotaCacheEntry>()
 let cacheLoaded = false

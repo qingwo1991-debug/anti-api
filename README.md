@@ -11,16 +11,22 @@
   <a href="#architecture">Architecture</a>
 </p>
 
+<p align="center">
+  <img src="docs/demo.gif" alt="Anti-API Demo" width="800">
+</p>
+
 ---
 
 > **Disclaimer**: This project is based on reverse engineering of Antigravity. Future compatibility is not guaranteed. For long-term use, avoid updating Antigravity.
 
-## What's New (v2.2.2)
+## What's New (v2.4.0)
 
-- ✅ **429 Handling** - Only switch accounts on QUOTA_EXHAUSTED; transient 429 retries stay on the same account
-- ✅ **Streaming Resilience** - Stream requests fall back across Antigravity base URLs on 404/5xx
-- ✅ **Routing UI Cleanup** - Refactored routing front-end logic for maintainability (no visual change)
-- ✅ **Routing Layout** - Taller component sizing for improved readability
+- ✅ **Streaming Optimization** - Improved stream reading to reduce unexpected interruptions
+- ✅ **Docker Support** - Complete Docker deployment with one-click start scripts
+- ✅ **Log Panel** - Real-time log viewer in the dashboard
+- ✅ **UI Layout** - Optimized quota card layout and privacy masking
+- ✅ **One-Click Scripts** - `start.command` (macOS) / `start.bat` (Windows) for native launch
+- ✅ **Docker Scripts** - `dstart.command` / `dstart.bat` for Docker launch
 
 ## Features
 
@@ -75,9 +81,10 @@ Run:
 docker run --rm -it \\
   -p 8964:8964 \\
   -p 51121:51121 \\
-  -e HOME=/app/data \\
+  -e ANTI_API_DATA_DIR=/app/data \\
+  -e ANTI_API_NO_OPEN=1 \\
   -e ANTI_API_OAUTH_NO_OPEN=1 \\
-  -v anti-api-data:/app/data \\
+  -v $HOME/.anti-api:/app/data \\
   anti-api
 ```
 
@@ -87,9 +94,19 @@ Compose:
 docker compose up --build
 ```
 
+Developer override (no rebuild, use local `src/` and `public/`):
+
+```bash
+docker compose up -d --no-build
+```
+
 Notes:
 - OAuth callback uses port `51121`. Make sure it is mapped.
 - If running on a remote host, set `ANTI_API_OAUTH_REDIRECT_URL` to a public URL like `http://YOUR_HOST:51121/oauth-callback`.
+- The bind mount reuses your local `~/.anti-api` data so Docker shares the same accounts and routing config.
+- Set `ANTI_API_NO_OPEN=1` to avoid trying to open the browser inside a container.
+- If Docker Hub is unstable, the default base image uses GHCR. You can override with `BUN_IMAGE=oven/bun:1.1.38`.
+ - ngrok will auto-download inside the container if missing (Linux only).
 
 ## Development
 
@@ -302,14 +319,14 @@ MIT
 
 > **免责声明**：本项目基于 Antigravity 逆向开发，未来版本兼容性未知，长久使用请尽可能避免更新Antigravity。
 
-## 更新内容 (v2.2.1)
+## 更新内容 (v2.4.0)
 
-- ✅ **Flow 稳定性** - 粘性游标推进 + 定期探测头部账号
-- ✅ **运行安全** - 上游请求超时 + PID 级启动清理
-- ✅ **配额面板优化** - 扇形图对齐 + 可选排序
-- ✅ **看门狗选项** - 崩溃自动重启（可选）
-- ✅ **错误信息清晰** - 429 日志摘要更明确
-- ✅ **新增测试** - Flow 粘性路由覆盖
+- ✅ **流式优化** - 优化流式读取，减少意外中断
+- ✅ **Docker 支持** - 完善 Docker 部署，提供一键启动脚本
+- ✅ **日志面板** - 面板内实时查看服务器日志
+- ✅ **UI 布局优化** - 配额卡片布局优化，隐私遮罩改进
+- ✅ **一键启动脚本** - `start.command` (macOS) / `start.bat` (Windows) 本地启动
+- ✅ **Docker 脚本** - `dstart.command` / `dstart.bat` Docker 启动
 
 ## 特性
 
