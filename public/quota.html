@@ -323,30 +323,37 @@
     <!-- Main Content -->
     <div class="max-w-6xl mx-auto">
         <!-- Tab Navigation -->
-        <div class="flex items-center gap-1 mb-6">
-            <button onclick="switchTab('quota')" id="tab-quota"
-                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-white bg-gradient-to-r from-cyan-500/30 to-blue-500/30 border border-cyan-500/50">
-                Quota
-            </button>
-            <button onclick="switchTab('usage')" id="tab-usage"
-                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200 hidden">
-                Usage
-            </button>
-            <button onclick="switchTab('remote')" id="tab-remote"
-                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
-                Remote
-            </button>
-            <button onclick="switchTab('routing')" id="tab-routing"
-                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
-                Routing <span class="text-[10px] text-gray-500">(Beta)</span>
-            </button>
-            <button onclick="switchTab('logs')" id="tab-logs"
-                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
-                Logs
-            </button>
-            <button onclick="switchTab('settings')" id="tab-settings"
-                class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
-                Settings
+        <div class="flex items-center justify-between mb-6">
+            <div class="flex items-center gap-1">
+                <button onclick="switchTab('quota')" id="tab-quota"
+                    class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-white bg-gradient-to-r from-cyan-500/30 to-blue-500/30 border border-cyan-500/50" data-i18n="tab.quota">
+                    Quota
+                </button>
+                <button onclick="switchTab('usage')" id="tab-usage"
+                    class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200 hidden" data-i18n="tab.usage">
+                    Usage
+                </button>
+                <button onclick="switchTab('remote')" id="tab-remote"
+                    class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200" data-i18n="tab.remote">
+                    Remote
+                </button>
+                <button onclick="switchTab('routing')" id="tab-routing"
+                    class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200">
+                    <span data-i18n="tab.routing">Routing</span> <span class="text-[10px] text-gray-500">(Beta)</span>
+                </button>
+                <button onclick="switchTab('logs')" id="tab-logs"
+                    class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200" data-i18n="tab.logs">
+                    Logs
+                </button>
+                <button onclick="switchTab('settings')" id="tab-settings"
+                    class="tab-btn px-5 py-2 rounded-lg font-bold text-sm transition-all duration-200 text-gray-400 hover:text-gray-200" data-i18n="tab.settings">
+                    Settings
+                </button>
+            </div>
+            <!-- Language Toggle -->
+            <button onclick="toggleLanguage()" id="lang-toggle"
+                class="px-3 py-1.5 rounded-lg font-bold text-xs transition-all duration-200 text-gray-400 hover:text-gray-200 border border-gray-700 hover:border-gray-500">
+                中文
             </button>
         </div>
 
@@ -360,20 +367,20 @@
             <!-- Quota Header -->
             <div class="mb-6 flex items-start justify-between">
                 <div>
-                    <h1 class="text-3xl font-bold text-gray-300">Quota</h1>
-                    <p id="plan-info" class="text-gray-500 text-sm font-bold mt-1">Loading...</p>
+                    <h1 class="text-3xl font-bold text-gray-300" data-i18n="quota.title">Quota</h1>
+                    <p id="plan-info" class="text-gray-500 text-sm font-bold mt-1" data-i18n="quota.loading">Loading...</p>
                 </div>
                 <div class="flex flex-col items-end gap-2">
                     <div class="flex items-center gap-3">
                         <div class="refresh-btn inline-block" id="add-account-container">
                             <button onclick="openAddAccountModal()" id="add-account-btn"
-                                class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                                class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm" data-i18n="button.add">
                                 Add
                             </button>
                         </div>
                         <div class="refresh-btn inline-block" id="refresh-container">
                             <button onclick="refreshAll(true)" id="refresh-btn"
-                                class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                                class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm" data-i18n="button.refresh">
                                 Refresh
                             </button>
                         </div>
@@ -400,11 +407,11 @@
         <div id="tab-content-usage" class="tab-content hidden">
             <div class="mb-8 flex items-start justify-between">
                 <div>
-                    <h1 class="text-3xl font-bold text-gray-300">Usage Statistics</h1>
-                    <p class="text-gray-500 text-sm mt-1 font-bold">Token consumption and estimated cost</p>
+                    <h1 class="text-3xl font-bold text-gray-300" data-i18n="usage.title">Usage Statistics</h1>
+                    <p class="text-gray-500 text-sm mt-1 font-bold" data-i18n="usage.subtitle">Token consumption and estimated cost</p>
                 </div>
                 <div class="refresh-btn inline-block">
-                    <button onclick="fetchUsageData()" class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                    <button onclick="fetchUsageData()" class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm" data-i18n="button.refresh">
                         Refresh
                     </button>
                 </div>
@@ -414,7 +421,7 @@
             <div class="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
                 <!-- Daily Usage Chart (3/5 width) -->
                 <div class="md:col-span-3 rounded-xl border border-gray-800 p-5">
-                    <div class="text-base font-bold text-gray-300 mb-4">Daily Usage</div>
+                    <div class="text-base font-bold text-gray-300 mb-4" data-i18n="usage.dailyUsage">Daily Usage</div>
                     <div style="height: 200px; max-height: 200px;">
                         <canvas id="daily-chart"></canvas>
                     </div>
@@ -425,23 +432,23 @@
                     style="min-height: 240px;">
                     <div class="space-y-6">
                         <div class="text-center">
-                            <div class="text-gray-400 text-base mb-3">Today Cost</div>
+                            <div class="text-gray-400 text-base mb-3" data-i18n="usage.todayCost">Today Cost</div>
                             <div id="usage-today-cost" class="text-4xl font-bold text-cyan-400">$0.00</div>
-                            <div id="usage-today-tokens" class="text-[11px] text-gray-500 mt-2 hidden">0 tokens</div>
+                            <div id="usage-today-tokens" class="text-[11px] text-gray-500 mt-2 hidden"><span data-i18n="usage.tokens">tokens</span></div>
                         </div>
                         <div class="text-center border-t border-gray-700 pt-6">
-                            <div class="text-gray-400 text-base mb-3">Total Cost</div>
+                            <div class="text-gray-400 text-base mb-3" data-i18n="usage.totalCost">Total Cost</div>
                             <div id="usage-total-large" class="text-4xl font-bold text-cyan-400">$0.00</div>
-                            <div id="usage-total-tokens" class="text-[11px] text-gray-500 mt-2">0 tokens</div>
+                            <div id="usage-total-tokens" class="text-[11px] text-gray-500 mt-2"><span data-i18n="usage.tokens">tokens</span></div>
                         </div>
                     </div>
-                    <div class="text-[10px] text-gray-600 mt-5 text-center">Based on public API pricing</div>
+                    <div class="text-[10px] text-gray-600 mt-5 text-center" data-i18n="usage.pricing">Based on public API pricing</div>
                 </div>
             </div>
 
             <!-- Model Distribution with integrated breakdown -->
             <div class="rounded-xl border border-gray-800 p-5">
-                <div class="text-sm font-bold text-gray-300 mb-4">Model Distribution</div>
+                <div class="text-sm font-bold text-gray-300 mb-4" data-i18n="usage.modelDistribution">Model Distribution</div>
                 <div class="flex flex-col md:flex-row md:items-center gap-10 py-4">
                     <!-- Chart on left -->
                     <div class="flex-shrink-0 ml-4" style="width: 240px; height: 240px;">
@@ -449,7 +456,7 @@
                     </div>
                     <!-- Model details on right -->
                     <div id="usage-model-list" class="flex-1 space-y-1 flex flex-col">
-                        <div class="text-gray-500 text-sm text-center py-4">No usage data yet</div>
+                        <div class="text-gray-500 text-sm text-center py-4" data-i18n="usage.noData">No usage data yet</div>
                     </div>
                 </div>
             </div>
@@ -471,36 +478,36 @@
         <div id="tab-content-logs" class="tab-content hidden">
             <div class="mb-6 flex items-start justify-between">
                 <div>
-                    <h1 class="text-2xl font-bold text-gray-300">Logs</h1>
-                    <p class="text-gray-500 text-sm font-bold mt-1">Live server output (recent lines only)</p>
+                    <h1 class="text-2xl font-bold text-gray-300" data-i18n="logs.title">Logs</h1>
+                    <p class="text-gray-500 text-sm font-bold mt-1" data-i18n="logs.subtitle">Live server output (recent lines only)</p>
                 </div>
                 <div class="flex items-center gap-2">
-                    <span id="logs-status" class="text-xs text-gray-500">Disconnected</span>
+                    <span id="logs-status" class="text-xs text-gray-500" data-i18n="logs.status.disconnected">Disconnected</span>
                 </div>
             </div>
 
             <div class="flex flex-wrap items-center gap-3 mb-4">
                 <div class="refresh-btn inline-block">
                     <button onclick="refreshLogs()" id="logs-refresh"
-                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm" data-i18n="logs.reload">
                         Reload
                     </button>
                 </div>
                 <div class="refresh-btn inline-block">
                     <button onclick="toggleLogsPause()" id="logs-toggle"
-                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm" data-i18n="logs.pause">
                         Pause
                     </button>
                 </div>
                 <div class="refresh-btn inline-block">
                     <button onclick="clearLogView()" id="logs-clear"
-                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm">
+                        class="px-4 py-1.5 rounded-lg font-bold text-gray-300 text-sm" data-i18n="logs.clear">
                         Clear
                     </button>
                 </div>
                 <label class="flex items-center gap-2 text-xs text-gray-500">
                     <input type="checkbox" id="logs-follow" checked>
-                    Follow
+                    <span data-i18n="logs.follow">Follow</span>
                 </label>
             </div>
 
@@ -514,8 +521,8 @@
         <!-- ==================== SETTINGS TAB ==================== -->
         <div id="tab-content-settings" class="tab-content hidden">
             <div class="mb-6">
-                <h1 class="text-2xl font-bold text-gray-300">Settings</h1>
-                <p class="text-gray-500 text-sm font-bold mt-1">Configure application behavior</p>
+                <h1 class="text-2xl font-bold text-gray-300" data-i18n="settings.title">Settings</h1>
+                <p class="text-gray-500 text-sm font-bold mt-1" data-i18n="settings.subtitle">Configure application behavior</p>
             </div>
 
             <div class="grid grid-cols-1 gap-4 max-w-5xl lg:grid-cols-3">
@@ -524,8 +531,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Preload Routing</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Load Routing tab in background for instant
+                            <div class="text-gray-200 font-medium" data-i18n="settings.preloadRouting">Preload Routing</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.preloadRouting.desc">Load Routing tab in background for instant
                                 switching
                             </div>
                         </div>
@@ -536,8 +543,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Auto Start ngrok</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Automatically start ngrok tunnel on server launch
+                            <div class="text-gray-200 font-medium" data-i18n="settings.autoNgrok">Auto Start ngrok</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.autoNgrok.desc">Automatically start ngrok tunnel on server launch
                             </div>
                         </div>
                         <input type="checkbox" id="setting-auto-ngrok" class="toggle-switch">
@@ -547,8 +554,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Auto Open Dashboard</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Open browser to Dashboard on server start</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.autoOpen">Auto Open Dashboard</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.autoOpen.desc">Open browser to Dashboard on server start</div>
                         </div>
                         <input type="checkbox" id="setting-auto-open" class="toggle-switch" checked>
                     </label>
@@ -559,8 +566,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Auto Refresh Quota</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Automatically refresh quota and usage every 10 minutes</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.autoRefresh">Auto Refresh Quota</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.autoRefresh.desc">Automatically refresh quota and usage every 10 minutes</div>
                         </div>
                         <input type="checkbox" id="setting-auto-refresh" class="toggle-switch" checked>
                     </label>
@@ -569,8 +576,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Privacy Protection</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Mask emails and usernames</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.privacy">Privacy Protection</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.privacy.desc">Mask emails and usernames</div>
                         </div>
                         <input type="checkbox" id="setting-privacy-mode" class="toggle-switch">
                     </label>
@@ -579,8 +586,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Compact Layout</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Reduce Antigravity cards to 2 bars</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.compact">Compact Layout</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.compact.desc">Reduce Antigravity cards to 2 bars</div>
                         </div>
                         <input type="checkbox" id="setting-compact-layout" class="toggle-switch">
                     </label>
@@ -591,8 +598,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Track Token Usage</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Estimate cost based on token consumption</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.trackUsage">Track Token Usage</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.trackUsage.desc">Estimate cost based on token consumption</div>
                         </div>
                         <input type="checkbox" id="setting-track-usage" class="toggle-switch" checked>
                     </label>
@@ -601,8 +608,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Capture Logs</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Store recent console logs for dashboard</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.captureLogs">Capture Logs</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.captureLogs.desc">Store recent console logs for dashboard</div>
                         </div>
                         <input type="checkbox" id="setting-capture-logs" class="toggle-switch">
                     </label>
@@ -611,8 +618,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Optimize Quota Sorting</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Sort cards by remaining quota within each provider</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.optimizeSort">Optimize Quota Sorting</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.optimizeSort.desc">Sort cards by remaining quota within each provider</div>
                         </div>
                         <input type="checkbox" id="setting-optimize-quota-sort" class="toggle-switch">
                     </label>
@@ -621,8 +628,8 @@
                     <label
                         class="flex items-center justify-between p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors cursor-pointer">
                         <div>
-                            <div class="text-gray-200 font-medium">Auto Restart (Watchdog)</div>
-                            <div class="text-gray-500 text-xs mt-0.5">Restart server automatically after a crash</div>
+                            <div class="text-gray-200 font-medium" data-i18n="settings.autoRestart">Auto Restart (Watchdog)</div>
+                            <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.autoRestart.desc">Restart server automatically after a crash</div>
                         </div>
                         <input type="checkbox" id="setting-auto-restart" class="toggle-switch">
                     </label>
@@ -632,24 +639,24 @@
             <!-- Action Buttons -->
             <div class="mt-6 flex gap-3 max-w-lg flex-wrap">
                 <button onclick="saveAllSettings()"
-                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all">
+                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all" data-i18n="button.save">
                     Save
                 </button>
                 <button onclick="resetSettings()"
-                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all">
+                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all" data-i18n="button.reset">
                     Reset
                 </button>
                 <button onclick="enableAllSettings()"
-                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all">
+                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all" data-i18n="button.enableAll">
                     Enable All
                 </button>
                 <button onclick="disableAllSettings()"
-                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all">
+                    class="px-4 py-2.5 rounded-xl border border-gray-700 text-gray-400 font-bold text-sm hover:border-gray-500 hover:text-gray-300 transition-all" data-i18n="button.disableAll">
                     Disable All
                 </button>
             </div>
 
-            <div class="mt-6 text-gray-600 text-xs">
+            <div class="mt-6 text-gray-600 text-xs" data-i18n="settings.saveNote">
                 Settings are saved to ~/.anti-api/settings.json. Click Save to apply changes.
             </div>
         </div>
@@ -667,7 +674,7 @@
         class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden items-center justify-center z-50">
         <div class="bg-[#111111] border border-[#2f253f] rounded-2xl w-full max-w-md p-6 text-gray-200">
             <div class="flex items-center justify-between mb-4">
-                <h2 class="text-lg font-bold">Add Account</h2>
+                <h2 class="text-lg font-bold" data-i18n="modal.addAccount">Add Account</h2>
                 <button onclick="closeAddAccountModal()" class="text-gray-500 hover:text-gray-300">✕</button>
             </div>
             <div class="space-y-2">
@@ -686,41 +693,258 @@
             </div>
             <div id="add-account-status" class="mt-4 text-xs text-gray-400 hidden"></div>
             <div id="codex-device" class="mt-4 hidden">
-                <div class="text-sm text-gray-400 mb-2">Open the browser and enter this code:</div>
+                <div class="text-sm text-gray-400 mb-2" data-i18n="modal.enterCode">Open the browser and enter this code:</div>
                 <div class="flex items-center gap-2">
                     <div id="codex-code"
                         class="px-3 py-2 rounded-lg bg-black border border-[#2f253f] font-mono text-sm text-gray-200">
                         ------
                     </div>
                     <button onclick="copyCodexCode()"
-                        class="px-3 py-2 rounded-lg border border-[#2f253f] text-xs hover:border-gray-500">
+                        class="px-3 py-2 rounded-lg border border-[#2f253f] text-xs hover:border-gray-500" data-i18n="button.copy">
                         Copy
                     </button>
                 </div>
+                <a id="codex-link" href="#" target="_blank"
+                    class="inline-block mt-3 text-blue-400 hover:text-blue-300 text-xs" data-i18n="modal.openPage">Open verification page</a>
             </div>
             <div id="copilot-device" class="mt-4 hidden">
-                <div class="text-sm text-gray-400 mb-2">Open the browser and enter this code:</div>
+                <div class="text-sm text-gray-400 mb-2" data-i18n="modal.enterCode">Open the browser and enter this code:</div>
                 <div class="flex items-center gap-2">
                     <div id="copilot-code"
                         class="px-3 py-2 rounded-lg bg-black border border-[#2f253f] font-mono text-sm text-gray-200">
                         ------
                     </div>
                     <button onclick="copyCopilotCode()"
-                        class="px-3 py-2 rounded-lg border border-[#2f253f] text-xs hover:border-gray-500">
+                        class="px-3 py-2 rounded-lg border border-[#2f253f] text-xs hover:border-gray-500" data-i18n="button.copy">
                         Copy
                     </button>
                 </div>
                 <a id="copilot-link" href="#" target="_blank"
-                    class="inline-block mt-3 text-blue-400 hover:text-blue-300 text-xs">Open verification page</a>
+                    class="inline-block mt-3 text-blue-400 hover:text-blue-300 text-xs" data-i18n="modal.openPage">Open verification page</a>
             </div>
         </div>
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8964';
+        // Dynamically determine API_BASE based on current host
+        const API_BASE = `${window.location.protocol}//${window.location.hostname}:8964`;
         let loadingDismissed = false;
         let codexPopup = null;
         let codexPopupUrl = null;
+
+        // Language translations
+        const translations = {
+            en: {
+                // Tabs
+                'tab.quota': 'Quota',
+                'tab.usage': 'Usage',
+                'tab.remote': 'Remote',
+                'tab.routing': 'Routing',
+                'tab.logs': 'Logs',
+                'tab.settings': 'Settings',
+                // Quota page
+                'quota.title': 'Quota',
+                'quota.loading': 'Loading...',
+                'quota.accounts': 'account(s)',
+                'quota.tapToPing': '• Tap to ping account',
+                'quota.noAccounts': 'No accounts yet',
+                'quota.addAccounts': 'Add accounts to see quota cards',
+                'quota.unavailable': '📊 Quota details unavailable',
+                'quota.authRequired': 'Authentication required or quota API unavailable',
+                'quota.connectionFailed': 'Connection failed',
+                'quota.unableToConnect': 'Unable to connect to',
+                'quota.refreshed': '✓ Refreshed',
+                // Usage page
+                'usage.title': 'Usage Statistics',
+                'usage.subtitle': 'Token consumption and estimated cost',
+                'usage.dailyUsage': 'Daily Usage',
+                'usage.todayCost': 'Today Cost',
+                'usage.totalCost': 'Total Cost',
+                'usage.tokens': 'tokens',
+                'usage.modelDistribution': 'Model Distribution',
+                'usage.noData': 'No usage data yet',
+                'usage.pricing': 'Based on public API pricing',
+                // Logs page
+                'logs.title': 'Logs',
+                'logs.subtitle': 'Live server output (recent lines only)',
+                'logs.status.disconnected': 'Disconnected',
+                'logs.status.connected': 'Connected',
+                'logs.reload': 'Reload',
+                'logs.pause': 'Pause',
+                'logs.resume': 'Resume',
+                'logs.clear': 'Clear',
+                'logs.follow': 'Follow',
+                // Settings page
+                'settings.title': 'Settings',
+                'settings.subtitle': 'Configure application behavior',
+                'settings.preloadRouting': 'Preload Routing',
+                'settings.preloadRouting.desc': 'Load Routing tab in background for instant switching',
+                'settings.autoNgrok': 'Auto Start ngrok',
+                'settings.autoNgrok.desc': 'Automatically start ngrok tunnel on server launch',
+                'settings.autoOpen': 'Auto Open Dashboard',
+                'settings.autoOpen.desc': 'Open browser to Dashboard on server start',
+                'settings.autoRefresh': 'Auto Refresh Quota',
+                'settings.autoRefresh.desc': 'Automatically refresh quota and usage every 10 minutes',
+                'settings.privacy': 'Privacy Protection',
+                'settings.privacy.desc': 'Mask emails and usernames',
+                'settings.compact': 'Compact Layout',
+                'settings.compact.desc': 'Reduce Antigravity cards to 2 bars',
+                'settings.trackUsage': 'Track Token Usage',
+                'settings.trackUsage.desc': 'Estimate cost based on token consumption',
+                'settings.captureLogs': 'Capture Logs',
+                'settings.captureLogs.desc': 'Store recent console logs for dashboard',
+                'settings.optimizeSort': 'Optimize Quota Sorting',
+                'settings.optimizeSort.desc': 'Sort cards by remaining quota within each provider',
+                'settings.autoRestart': 'Auto Restart (Watchdog)',
+                'settings.autoRestart.desc': 'Restart server automatically after a crash',
+                'settings.saveNote': 'Settings are saved to ~/.anti-api/settings.json. Click Save to apply changes.',
+                // Buttons
+                'button.add': 'Add',
+                'button.refresh': 'Refresh',
+                'button.retry': 'Retry',
+                'button.save': 'Save',
+                'button.reset': 'Reset',
+                'button.enableAll': 'Enable All',
+                'button.disableAll': 'Disable All',
+                'button.close': 'Close',
+                'button.copy': 'Copy',
+                // Modal
+                'modal.addAccount': 'Add Account',
+                'modal.enterCode': 'Open the browser and enter this code:',
+                'modal.openPage': 'Open verification page',
+                'modal.authenticating': 'Authenticating...',
+                'modal.authSuccess': '✓ Authentication successful',
+                'modal.authError': 'Authentication error:',
+                // Messages
+                'message.copied': 'Copied!',
+                'message.saved': 'Settings saved!',
+                'message.saveFailed': 'Failed to save settings',
+                'message.resetToDefaults': 'Reset to defaults',
+                'message.allEnabled': 'All settings enabled',
+                'message.allDisabled': 'All settings disabled',
+                'message.updated': 'Updated'
+            },
+            zh: {
+                // 标签页
+                'tab.quota': '配额',
+                'tab.usage': '用量',
+                'tab.remote': '远程',
+                'tab.routing': '路由',
+                'tab.logs': '日志',
+                'tab.settings': '设置',
+                // 配额页面
+                'quota.title': '配额',
+                'quota.loading': '加载中...',
+                'quota.accounts': '个账户',
+                'quota.tapToPing': '• 点击卡片可测试账户连接',
+                'quota.noAccounts': '暂无账户',
+                'quota.addAccounts': '添加账户以查看配额卡片',
+                'quota.unavailable': '📊 配额详情不可用',
+                'quota.authRequired': '需要认证或配额API不可用',
+                'quota.connectionFailed': '连接失败',
+                'quota.unableToConnect': '无法连接到',
+                'quota.refreshed': '✓ 已刷新',
+                // 用量页面
+                'usage.title': '使用统计',
+                'usage.subtitle': 'Token消耗和预估费用',
+                'usage.dailyUsage': '每日使用量',
+                'usage.todayCost': '今日费用',
+                'usage.totalCost': '总费用',
+                'usage.tokens': 'tokens',
+                'usage.modelDistribution': '模型分布',
+                'usage.noData': '暂无使用数据',
+                'usage.pricing': '基于公开API定价',
+                // 日志页面
+                'logs.title': '日志',
+                'logs.subtitle': '实时服务器输出（仅显示最近日志）',
+                'logs.status.disconnected': '已断开',
+                'logs.status.connected': '已连接',
+                'logs.reload': '重新加载',
+                'logs.pause': '暂停',
+                'logs.resume': '继续',
+                'logs.clear': '清空',
+                'logs.follow': '跟随',
+                // 设置页面
+                'settings.title': '设置',
+                'settings.subtitle': '配置应用程序行为',
+                'settings.preloadRouting': '预加载路由',
+                'settings.preloadRouting.desc': '在后台加载路由标签页以实现即时切换',
+                'settings.autoNgrok': '自动启动 ngrok',
+                'settings.autoNgrok.desc': '服务器启动时自动启动ngrok隧道',
+                'settings.autoOpen': '自动打开仪表板',
+                'settings.autoOpen.desc': '服务器启动时自动打开浏览器到仪表板',
+                'settings.autoRefresh': '自动刷新配额',
+                'settings.autoRefresh.desc': '每10分钟自动刷新配额和用量',
+                'settings.privacy': '隐私保护',
+                'settings.privacy.desc': '隐藏邮箱和用户名',
+                'settings.compact': '紧凑布局',
+                'settings.compact.desc': '将Antigravity卡片简化为2个进度条',
+                'settings.trackUsage': '追踪Token用量',
+                'settings.trackUsage.desc': '基于token消耗估算费用',
+                'settings.captureLogs': '捕获日志',
+                'settings.captureLogs.desc': '为仪表板存储最近的控制台日志',
+                'settings.optimizeSort': '优化配额排序',
+                'settings.optimizeSort.desc': '在每个提供商内按剩余配额排序卡片',
+                'settings.autoRestart': '自动重启（守护进程）',
+                'settings.autoRestart.desc': '崩溃后自动重启服务器',
+                'settings.saveNote': '设置保存到 ~/.anti-api/settings.json。点击保存以应用更改。',
+                // 按钮
+                'button.add': '添加',
+                'button.refresh': '刷新',
+                'button.retry': '重试',
+                'button.save': '保存',
+                'button.reset': '重置',
+                'button.enableAll': '全部启用',
+                'button.disableAll': '全部禁用',
+                'button.close': '关闭',
+                'button.copy': '复制',
+                // 弹窗
+                'modal.addAccount': '添加账户',
+                'modal.enterCode': '在浏览器中打开并输入此代码：',
+                'modal.openPage': '打开验证页面',
+                'modal.authenticating': '认证中...',
+                'modal.authSuccess': '✓ 认证成功',
+                'modal.authError': '认证错误：',
+                // 消息
+                'message.copied': '已复制！',
+                'message.saved': '设置已保存！',
+                'message.saveFailed': '保存设置失败',
+                'message.resetToDefaults': '已重置为默认值',
+                'message.allEnabled': '所有设置已启用',
+                'message.allDisabled': '所有设置已禁用',
+                'message.updated': '已更新'
+            }
+        };
+
+        // Get current language from localStorage or default to 'en'
+        let currentLang = localStorage.getItem('anti-api-language') || 'en';
+
+        // Toggle language
+        function toggleLanguage() {
+            currentLang = currentLang === 'en' ? 'zh' : 'en';
+            localStorage.setItem('anti-api-language', currentLang);
+            updateLanguage();
+        }
+
+        // Update all text elements based on current language
+        function updateLanguage() {
+            const langToggle = document.getElementById('lang-toggle');
+            if (langToggle) {
+                langToggle.textContent = currentLang === 'en' ? '中文' : 'EN';
+            }
+
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (translations[currentLang] && translations[currentLang][key]) {
+                    el.textContent = translations[currentLang][key];
+                }
+            });
+        }
+
+        // Initialize language on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateLanguage();
+        });
 
         // Tab state
         let currentTab = 'quota';
