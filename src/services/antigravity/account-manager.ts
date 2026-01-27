@@ -578,30 +578,18 @@ class AccountManager {
             if (!account) return false
 
             const { getAccountModelQuotaPercent } = await import("~/services/quota-aggregator")
-            const modelLower = modelId.toLowerCase()
 
-            let quotaPercent = 0
+            // ✅ 修复：传入正确的 provider 参数
+            const quotaPercent = getAccountModelQuotaPercent("antigravity", accountId, modelId)
 
-            // 根据模型类型检查对应配额
-            if (modelLower.includes("image")) {
-                // 画图模型：检查 gimage 配额
-                quotaPercent = await getAccountModelQuotaPercent(accountId, "gemini-3-pro-image")
-            } else if (modelLower.includes("claude") || modelLower.includes("opus") || modelLower.includes("sonnet") || modelLower.includes("haiku")) {
-                // Claude 模型：检查 claude_gpt 配额
-                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
-            } else if (modelLower.includes("gpt") || modelLower.includes("o1") || modelLower.includes("o3")) {
-                // GPT 模型：检查 claude_gpt 配额
-                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
-            } else if (modelLower.includes("gemini") && (modelLower.includes("pro") || modelLower.includes("1.5") || modelLower.includes("2.0"))) {
-                // Gemini Pro：检查 gpro 配额
-                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
-            } else if (modelLower.includes("gemini") && modelLower.includes("flash")) {
-                // Gemini Flash：检查 gflash 配额
-                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
-            } else {
-                // 其他模型：默认检查通用配额
-                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
+            // 如果获取配额失败（返回 null），打印警告并假设有配额（避免阻止请求）
+            if (quotaPercent === null) {
+                consola.warn(`Failed to get quota for account ${account.email}, model ${modelId}, assuming quota available`)
+                return true
             }
+
+            // 打印调试信息
+            consola.debug(`Account ${account.email}: ${modelId} quota = ${quotaPercent}%, reserve = ${reservePercent}%`)
 
             // 配额必须高于保留阈值
             return quotaPercent > reservePercent
