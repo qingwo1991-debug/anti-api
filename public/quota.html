@@ -2018,6 +2018,10 @@
                         setAddAccountStatus(`Imported Codex: ${first.email || first.id || 'Codex'}`);
                     }
                     closeAddAccountModal();
+                } else if (provider === 'antigravity' && data.status === 'pending') {
+                    // Antigravity 非阻塞登录流程
+                    showAntigravityAuthFlow(data);
+                    return;
                 } else {
                     setAddAccountStatus(`Connected: ${data.email || data.id || provider}`);
                     closeAddAccountModal();
@@ -2041,6 +2045,38 @@
             }
             setAddAccountStatus('Waiting for GitHub Copilot authorization...');
             pollCopilotStatus(data.device_code, data.interval || 5);
+        }
+
+        function showAntigravityAuthFlow(data) {
+            // 打开授权页面
+            if (data.auth_url) {
+                window.open(data.auth_url, '_blank');
+            }
+            setAddAccountStatus('Please complete Google login in the new window...');
+            pollAntigravityStatus(data.session_id);
+        }
+
+        async function pollAntigravityStatus(sessionId) {
+            if (!sessionId) return;
+            try {
+                const status = await fetch(`${API_BASE}/auth/antigravity/status?session_id=${sessionId}`);
+                const data = await status.json();
+                if (data.status === 'success') {
+                    setAddAccountStatus(`Connected: ${data.email || 'Antigravity'}`);
+                    closeAddAccountModal();
+                    await checkAuthStatus();
+                    fetchQuota(true);
+                    return;
+                }
+                if (data.status === 'error') {
+                    setAddAccountStatus(data.error || 'Antigravity authentication failed');
+                    return;
+                }
+                // 还在等待，继续轮询
+                setTimeout(() => pollAntigravityStatus(sessionId), 2000);
+            } catch (error) {
+                setAddAccountStatus(`Authentication error: ${error.message}`);
+            }
         }
 
         function showCodexDeviceFlow(data) {
