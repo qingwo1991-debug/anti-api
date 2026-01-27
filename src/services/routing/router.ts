@@ -12,6 +12,8 @@ import { buildMessageStart, buildContentBlockStart, buildTextDelta, buildInputJs
 import { formatLogTime, setRequestLogContext } from "~/lib/logger"
 import type { AuthProvider } from "~/services/auth/types"
 import { recordUsage } from "~/services/usage-tracker"
+import { getAccountModelQuotaPercent } from "~/services/quota-aggregator"
+import { getSetting } from "~/services/settings"
 
 export class RoutingError extends Error {
     status: number
@@ -352,9 +354,22 @@ function resolveAccountEntries(config: RoutingConfig, model: string): AccountRou
 function shouldSkipFlowEntry(
     entry: RoutingEntry,
     entriesLength: number,
-    options: { ignoreRateLimit?: boolean } = {}
+    options: { ignoreRateLimit?: boolean; ignoreQuotaReserve?: boolean } = {}
 ): boolean {
     const ignoreRateLimit = options.ignoreRateLimit ?? false
+    const ignoreQuotaReserve = options.ignoreQuotaReserve ?? false
+
+    // 检查配额保留设置（只在有多个条目时生效）
+    if (!ignoreQuotaReserve && entriesLength > 1) {
+        const reservePercent = getSetting("quotaReservePercent")
+        if (reservePercent > 0) {
+            const quotaPercent = getAccountModelQuotaPercent(entry.provider, entry.accountId, entry.modelId)
+            if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                return true // 配额低于保留阈值，跳过此账户
+            }
+        }
+    }
+
     if (entry.provider === "antigravity") {
         const accountId = entry.accountId === "auto" ? undefined : entry.accountId
         if (!ignoreRateLimit && accountId && entriesLength > 1) {

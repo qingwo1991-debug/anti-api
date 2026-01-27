@@ -633,6 +633,22 @@
                         </div>
                         <input type="checkbox" id="setting-auto-restart" class="toggle-switch">
                     </label>
+
+                    <!-- Quota Reserve -->
+                    <div class="p-4 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="text-gray-200 font-medium" data-i18n="settings.quotaReserve">Quota Reserve</div>
+                                <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.quotaReserve.desc">Switch to next account when quota falls below this percentage</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="setting-quota-reserve" min="0" max="50" value="0"
+                                    class="w-16 px-2 py-1 rounded-lg bg-gray-900 border border-gray-700 text-gray-200 text-sm text-center focus:outline-none focus:border-cyan-500">
+                                <span class="text-gray-400 text-sm">%</span>
+                            </div>
+                        </div>
+                        <div class="text-gray-600 text-xs mt-2" data-i18n="settings.quotaReserve.hint">Set to 0 to disable. Recommended: 5-10% to avoid exhausting all accounts.</div>
+                    </div>
                 </div>
             </div>
 
@@ -996,7 +1012,8 @@
                 compactLayout: document.getElementById('setting-compact-layout').checked,
                 trackUsage: document.getElementById('setting-track-usage').checked,
                 optimizeQuotaSort: document.getElementById('setting-optimize-quota-sort').checked,
-                captureLogs: document.getElementById('setting-capture-logs').checked
+                captureLogs: document.getElementById('setting-capture-logs').checked,
+                quotaReservePercent: parseInt(document.getElementById('setting-quota-reserve').value, 10) || 0
             };
             try {
                 const res = await fetch(`${API_BASE}/settings`, {
@@ -1040,6 +1057,7 @@
             document.getElementById('setting-track-usage').checked = true;
             document.getElementById('setting-optimize-quota-sort').checked = false;
             document.getElementById('setting-capture-logs').checked = false;
+            document.getElementById('setting-quota-reserve').value = 0;
 
             // Save defaults to server
             await saveAllSettings();
@@ -1156,6 +1174,7 @@
             document.getElementById('setting-track-usage').checked = settings.trackUsage;
             document.getElementById('setting-optimize-quota-sort').checked = settings.optimizeQuotaSort;
             document.getElementById('setting-capture-logs').checked = settings.captureLogs;
+            document.getElementById('setting-quota-reserve').value = settings.quotaReservePercent || 0;
             window._privacyMode = settings.privacyMode;
             window._compactLayout = settings.compactLayout;
             window._trackUsage = settings.trackUsage;

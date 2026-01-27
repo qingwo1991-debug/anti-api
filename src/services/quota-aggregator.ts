@@ -80,6 +80,48 @@ function getCachedBars(provider: QuotaCacheEntry["provider"], accountId: string)
     return cached?.bars || null
 }
 
+/**
+ * 获取账户的最低配额百分比（用于路由决策）
+ * 返回该账户所有配额条中的最小值
+ */
+export function getAccountMinQuotaPercent(provider: "antigravity" | "codex" | "copilot", accountId: string): number | null {
+    loadQuotaCache()
+    const bars = getCachedBars(provider, accountId)
+    if (!bars || bars.length === 0) return null
+    return Math.min(...bars.map(bar => bar.percentage))
+}
+
+/**
+ * 获取账户特定模型的配额百分比
+ */
+export function getAccountModelQuotaPercent(provider: "antigravity" | "codex" | "copilot", accountId: string, modelId: string): number | null {
+    loadQuotaCache()
+    const bars = getCachedBars(provider, accountId)
+    if (!bars || bars.length === 0) return null
+
+    // 根据模型类型匹配对应的配额条
+    if (provider === "antigravity") {
+        // Claude/GPT 模型使用 claude_gpt 配额
+        if (modelId.includes("claude") || modelId.includes("gpt")) {
+            const bar = bars.find(b => b.key === "claude_gpt")
+            if (bar) return bar.percentage
+        }
+        // Gemini Pro 模型使用 gpro 配额
+        if (modelId.includes("gemini") && modelId.includes("pro")) {
+            const bar = bars.find(b => b.key === "gpro")
+            if (bar) return bar.percentage
+        }
+        // Gemini Flash 模型使用 gflash 配额
+        if (modelId.includes("gemini") && modelId.includes("flash")) {
+            const bar = bars.find(b => b.key === "gflash")
+            if (bar) return bar.percentage
+        }
+    }
+
+    // 其他情况返回最低配额
+    return Math.min(...bars.map(bar => bar.percentage))
+}
+
 export async function getAggregatedQuota(): Promise<{
     timestamp: string
     accounts: AccountQuotaView[]

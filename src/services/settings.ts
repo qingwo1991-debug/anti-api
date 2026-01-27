@@ -21,6 +21,8 @@ export interface AppSettings {
     trackUsage: boolean
     optimizeQuotaSort: boolean
     captureLogs: boolean
+    // 配额保留设置：当账户配额低于此百分比时切换到下一个账户
+    quotaReservePercent: number
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -34,6 +36,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     trackUsage: true,
     optimizeQuotaSort: false,
     captureLogs: false,
+    quotaReservePercent: 0, // 默认不保留，0 表示用尽才切换
 }
 
 function ensureSettingsDir(): void {
