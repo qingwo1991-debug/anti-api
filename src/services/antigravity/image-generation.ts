@@ -336,94 +336,131 @@ function enhancePrompt(basePrompt: string, quality?: string, style?: string): st
  * Generate images using Antigravity's Gemini 3 Pro Image model
  */
 export async function generateImages(request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
-    // Get account with lock support
-    let accessToken: string
-    let accountId: string | undefined
-    let projectId: string
-    let releaseAccountLock: (() => void) | null = null
+    const maxAttempts = 3  // 最多重试3次
+    let currentAttempt = 0
+    let lastError: Error | null = null
 
-    const account = await accountManager.getNextAvailableAccount()
-    if (account) {
-        accessToken = account.accessToken
-        accountId = account.accountId
-        projectId = account.projectId
+    while (currentAttempt < maxAttempts) {
+        currentAttempt++
 
-        // Acquire account lock to prevent concurrent requests
-        releaseAccountLock = await accountManager.acquireAccountLock(accountId)
-    } else {
-        accessToken = await getAccessToken()
-        projectId = state.cloudaicompanionProject || "unknown"
-    }
+        // Get account with lock support
+        let accessToken: string
+        let accountId: string | undefined
+        let projectId: string
+        let releaseAccountLock: (() => void) | null = null
 
-    try {
-        // Parse model configuration (with OpenAI parameter support)
-        const imageConfig = parseImageModelConfig(request.model, request.size, request.quality)
+        const account = await accountManager.getNextAvailableAccount(currentAttempt > 1)  // 重试时强制轮换
+        if (account) {
+            accessToken = account.accessToken
+            accountId = account.accountId
+            projectId = account.projectId
 
-        // Enhance prompt based on quality and style
-        const finalPrompt = enhancePrompt(request.prompt, request.quality, request.style)
-
-        // Generate images concurrently (support multiple if requested)
-        const numImages = Math.min(request.n || 1, 10)  // Max 10 images
-        const tasks: Promise<{ images: string[]; mimeType: string }>[] = []
-
-        for (let i = 0; i < numImages; i++) {
-            const antigravityRequest = buildImageGenRequest(finalPrompt, imageConfig, projectId)
-            tasks.push(
-                sendImageRequest(antigravityRequest, accessToken, accountId, request.model)
-            )
-        }
-
-        // Collect results (partial success allowed)
-        const allImages: Array<{ b64_json?: string; url?: string; revised_prompt?: string }> = []
-        const errors: string[] = []
-
-        const results = await Promise.allSettled(tasks)
-        for (let i = 0; i < results.length; i++) {
-            const result = results[i]
-            if (result.status === "fulfilled") {
-                for (const imageData of result.value.images) {
-                    if (request.response_format === "url") {
-                        // Convert base64 to data URL for "url" format
-                        const dataUrl = `data:${result.value.mimeType};base64,${imageData}`
-                        allImages.push({ url: dataUrl, revised_prompt: finalPrompt })
-                    } else {
-                        allImages.push({ b64_json: imageData, revised_prompt: finalPrompt })
-                    }
-                }
-            } else {
-                const errorMsg = result.reason?.message || String(result.reason)
-                consola.error(`Image generation task ${i + 1} failed:`, errorMsg)
-                errors.push(errorMsg)
-            }
-        }
-
-        if (allImages.length === 0) {
-            const errorSummary = errors.length > 0 ? errors.join("; ") : "No images generated"
-            throw new Error(`All ${numImages} image generation requests failed. ${errorSummary}`)
-        }
-
-        // Log partial success warning
-        if (errors.length > 0) {
-            consola.warn(
-                `Partial success: ${allImages.length} out of ${numImages} images generated. Errors: ${errors.join("; ")}`
-            )
+            // Acquire account lock to prevent concurrent requests
+            releaseAccountLock = await accountManager.acquireAccountLock(accountId)
         } else {
-            consola.success(`Successfully generated ${allImages.length} image(s)`)
+            accessToken = await getAccessToken()
+            projectId = state.cloudaicompanionProject || "unknown"
         }
 
-        // Record usage
-        import("~/services/usage-tracker").then(({ recordUsage }) => {
-            recordUsage(request.model, 100 * allImages.length, 0)  // Estimate 100 input tokens per image
-        }).catch(() => {})
+        try {
+            // Parse model configuration (with OpenAI parameter support)
+            const imageConfig = parseImageModelConfig(request.model, request.size, request.quality)
 
-        return {
-            created: Math.floor(Date.now() / 1000),
-            data: allImages
-        }
-    } finally {
-        // Always release the account lock
-        if (releaseAccountLock) {
-            releaseAccountLock()
+            // Enhance prompt based on quality and style
+            const finalPrompt = enhancePrompt(request.prompt, request.quality, request.style)
+
+            // Generate images concurrently (support multiple if requested)
+            const numImages = Math.min(request.n || 1, 10)  // Max 10 images
+            const tasks: Promise<{ images: string[]; mimeType: string }>[] = []
+
+            for (let i = 0; i < numImages; i++) {
+                const antigravityRequest = buildImageGenRequest(finalPrompt, imageConfig, projectId)
+                tasks.push(
+                    sendImageRequest(antigravityRequest, accessToken, accountId, request.model)
+                )
+            }
+
+            // Collect results (partial success allowed)
+            const allImages: Array<{ b64_json?: string; url?: string; revised_prompt?: string }> = []
+            const errors: string[] = []
+
+            const results = await Promise.allSettled(tasks)
+            for (let i = 0; i < results.length; i++) {
+                const result = results[i]
+                if (result.status === "fulfilled") {
+                    for (const imageData of result.value.images) {
+                        if (request.response_format === "url") {
+                            // Convert base64 to data URL for "url" format
+                            const dataUrl = `data:${result.value.mimeType};base64,${imageData}`
+                            allImages.push({ url: dataUrl, revised_prompt: finalPrompt })
+                        } else {
+                            allImages.push({ b64_json: imageData, revised_prompt: finalPrompt })
+                        }
+                    }
+                } else {
+                    const errorMsg = result.reason?.message || String(result.reason)
+                    errors.push(errorMsg)
+                }
+            }
+
+            // 检查是否所有任务都因为 429 失败
+            const all429Errors = errors.every(err =>
+                err.includes("429") || err.includes("resource exhausted") || err.includes("quota")
+            )
+
+            if (allImages.length === 0 && all429Errors && currentAttempt < maxAttempts) {
+                // 所有任务都失败且是 429 错误，释放锁并重试下一个账号
+                if (releaseAccountLock) releaseAccountLock()
+                consola.warn(`Attempt ${currentAttempt}: All images failed with 429, switching account and retrying...`)
+                lastError = new Error(errors[0] || "All images failed")
+                continue  // 重试下一个账号
+            }
+
+            if (allImages.length === 0) {
+                const errorSummary = errors.length > 0 ? errors.join("; ") : "No images generated"
+                throw new Error(`All ${numImages} image generation requests failed. ${errorSummary}`)
+            }
+
+            // Log partial success warning
+            if (errors.length > 0) {
+                consola.warn(
+                    `Partial success: ${allImages.length} out of ${numImages} images generated. Errors: ${errors.join("; ")}`
+                )
+            } else {
+                consola.success(`Successfully generated ${allImages.length} image(s)`)
+            }
+
+            // Record usage
+            import("~/services/usage-tracker").then(({ recordUsage }) => {
+                recordUsage(request.model, 100 * allImages.length, 0)  // Estimate 100 input tokens per image
+            }).catch(() => {})
+
+            // 成功，释放锁并返回
+            if (releaseAccountLock) releaseAccountLock()
+
+            return {
+                created: Math.floor(Date.now() / 1000),
+                data: allImages
+            }
+        } catch (error) {
+            // 释放锁
+            if (releaseAccountLock) releaseAccountLock()
+
+            // 检查是否是 429 错误
+            const errorMsg = error instanceof Error ? error.message : String(error)
+            const is429Error = errorMsg.includes("429") || errorMsg.includes("resource exhausted") || errorMsg.includes("quota")
+
+            if (is429Error && currentAttempt < maxAttempts) {
+                consola.warn(`Attempt ${currentAttempt}: Image generation failed with 429, switching account and retrying...`)
+                lastError = error as Error
+                continue  // 重试下一个账号
+            }
+
+            // 非 429 错误或已达到最大重试次数，直接抛出
+            throw error
         }
     }
+
+    // 所有重试都失败了
+    throw lastError || new Error(`Failed to generate images after ${maxAttempts} attempts`)
 }
