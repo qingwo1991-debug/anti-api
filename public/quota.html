@@ -658,6 +658,36 @@
                         <div class="text-gray-600 text-xs" data-i18n="settings.quotaReserve.hint">Set to 0 to disable. Recommended: 5-10% to avoid exhausting all accounts.</div>
                     </div>
                 </div>
+
+                <!-- API Key Security Section -->
+                <div class="mt-6 max-w-lg">
+                    <h2 class="text-lg font-bold text-gray-400 mb-3" data-i18n="settings.apiKey">API Key Security</h2>
+                    <div class="p-5 rounded-xl border border-red-500/30 bg-gradient-to-r from-red-500/5 to-transparent">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <div class="text-gray-200 font-medium" data-i18n="settings.apiKey.enable">Enable API Key</div>
+                                <div class="text-gray-500 text-xs mt-0.5" data-i18n="settings.apiKey.enable.desc">Require API key for all API endpoints</div>
+                            </div>
+                            <input type="checkbox" id="setting-api-key-enabled" class="toggle-switch">
+                        </div>
+                        <div class="mb-3">
+                            <div class="text-gray-400 text-xs mb-2" data-i18n="settings.apiKey.current">Current API Key:</div>
+                            <div class="flex items-center gap-2">
+                                <input type="text" id="setting-api-key" readonly
+                                    class="flex-1 px-3 py-2 rounded-lg bg-gray-900 border border-gray-700 text-gray-300 text-sm font-mono focus:outline-none">
+                                <button onclick="copyApiKey()"
+                                    class="px-3 py-2 rounded-lg border border-gray-700 text-gray-400 text-xs hover:border-gray-500 hover:text-gray-300 transition-all" data-i18n="button.copy">
+                                    Copy
+                                </button>
+                                <button onclick="regenerateApiKeyUI()"
+                                    class="px-3 py-2 rounded-lg border border-gray-700 text-gray-400 text-xs hover:border-red-500 hover:text-red-400 transition-all" data-i18n="button.regenerate">
+                                    Regenerate
+                                </button>
+                            </div>
+                        </div>
+                        <div class="text-gray-600 text-xs" data-i18n="settings.apiKey.hint">Use with Authorization: Bearer &lt;key&gt; or x-api-key header. Dashboard access is always allowed.</div>
+                    </div>
+                </div>
             </div>
 
             <!-- Action Buttons -->
@@ -824,6 +854,11 @@
                 'settings.quotaReserve': 'Quota Reserve',
                 'settings.quotaReserve.desc': 'Switch to next account when quota falls below this percentage',
                 'settings.quotaReserve.hint': 'Set to 0 to disable. Recommended: 5-10% to avoid exhausting all accounts.',
+                'settings.apiKey': 'API Key Security',
+                'settings.apiKey.enable': 'Enable API Key',
+                'settings.apiKey.enable.desc': 'Require API key for all API endpoints',
+                'settings.apiKey.current': 'Current API Key:',
+                'settings.apiKey.hint': 'Use with Authorization: Bearer <key> or x-api-key header. Dashboard access is always allowed.',
                 'settings.saveNote': 'Settings are saved to ~/.anti-api/settings.json. Click Save to apply changes.',
                 // Buttons
                 'button.add': 'Add',
@@ -835,6 +870,7 @@
                 'button.disableAll': 'Disable All',
                 'button.close': 'Close',
                 'button.copy': 'Copy',
+                'button.regenerate': 'Regenerate',
                 // Modal
                 'modal.addAccount': 'Add Account',
                 'modal.enterCode': 'Open the browser and enter this code:',
@@ -917,6 +953,11 @@
                 'settings.quotaReserve': '配额保留',
                 'settings.quotaReserve.desc': '当账户配额低于此百分比时切换到下一个账户',
                 'settings.quotaReserve.hint': '设为 0 禁用此功能。推荐 5-10%，避免榨干所有账户。',
+                'settings.apiKey': 'API Key 安全',
+                'settings.apiKey.enable': '启用 API Key',
+                'settings.apiKey.enable.desc': '所有 API 端点都需要 API Key 认证',
+                'settings.apiKey.current': '当前 API Key：',
+                'settings.apiKey.hint': '使用 Authorization: Bearer <key> 或 x-api-key 请求头。Dashboard 访问始终允许。',
                 'settings.saveNote': '设置保存到 ~/.anti-api/settings.json。点击保存以应用更改。',
                 // 按钮
                 'button.add': '添加',
@@ -928,6 +969,7 @@
                 'button.disableAll': '全部禁用',
                 'button.close': '关闭',
                 'button.copy': '复制',
+                'button.regenerate': '重新生成',
                 // 弹窗
                 'modal.addAccount': '添加账户',
                 'modal.enterCode': '在浏览器中打开并输入此代码：',
@@ -1027,7 +1069,8 @@
                 trackUsage: document.getElementById('setting-track-usage').checked,
                 optimizeQuotaSort: document.getElementById('setting-optimize-quota-sort').checked,
                 captureLogs: document.getElementById('setting-capture-logs').checked,
-                quotaReservePercent: parseInt(document.getElementById('setting-quota-reserve').value, 10) || 0
+                quotaReservePercent: parseInt(document.getElementById('setting-quota-reserve').value, 10) || 0,
+                apiKeyEnabled: document.getElementById('setting-api-key-enabled').checked
             };
             try {
                 const res = await fetch(`${API_BASE}/settings`, {
@@ -1073,6 +1116,7 @@
             document.getElementById('setting-capture-logs').checked = false;
             document.getElementById('setting-quota-reserve').value = 0;
             document.getElementById('setting-quota-reserve-slider').value = 0;
+            document.getElementById('setting-api-key-enabled').checked = false;
 
             // Save defaults to server
             await saveAllSettings();
@@ -1090,6 +1134,7 @@
             document.getElementById('setting-track-usage').checked = true;
             document.getElementById('setting-optimize-quota-sort').checked = true;
             document.getElementById('setting-capture-logs').checked = true;
+            document.getElementById('setting-api-key-enabled').checked = true;
 
             await saveAllSettings();
             showSettingsToast('All settings enabled');
@@ -1106,9 +1151,34 @@
             document.getElementById('setting-track-usage').checked = false;
             document.getElementById('setting-optimize-quota-sort').checked = false;
             document.getElementById('setting-capture-logs').checked = false;
+            document.getElementById('setting-api-key-enabled').checked = false;
 
             await saveAllSettings();
             showSettingsToast('All settings disabled');
+        }
+
+        function copyApiKey() {
+            const apiKey = document.getElementById('setting-api-key').value;
+            if (apiKey) {
+                navigator.clipboard.writeText(apiKey);
+                showSettingsToast('API Key copied!');
+            }
+        }
+
+        async function regenerateApiKeyUI() {
+            if (!confirm('Regenerate API Key? All existing clients will need to update their key.')) return;
+            try {
+                const res = await fetch(`${API_BASE}/settings/regenerate-api-key`, { method: 'POST' });
+                const data = await res.json();
+                if (data.apiKey) {
+                    document.getElementById('setting-api-key').value = data.apiKey;
+                    showSettingsToast('API Key regenerated!');
+                } else {
+                    showSettingsToast('Failed to regenerate', true);
+                }
+            } catch (e) {
+                showSettingsToast('Failed to regenerate', true);
+            }
         }
 
         function showSettingsToast(message, isError = false) {
@@ -1191,6 +1261,8 @@
             document.getElementById('setting-capture-logs').checked = settings.captureLogs;
             document.getElementById('setting-quota-reserve').value = settings.quotaReservePercent || 0;
             document.getElementById('setting-quota-reserve-slider').value = settings.quotaReservePercent || 0;
+            document.getElementById('setting-api-key-enabled').checked = settings.apiKeyEnabled || false;
+            document.getElementById('setting-api-key').value = settings.apiKey || '';
             window._privacyMode = settings.privacyMode;
             window._compactLayout = settings.compactLayout;
             window._trackUsage = settings.trackUsage;
