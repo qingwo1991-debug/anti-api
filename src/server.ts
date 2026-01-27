@@ -65,6 +65,7 @@ const API_KEY_WHITELIST = [
     "/",
     "/health",
     "/quota",
+    "/quota/json",
     "/routing",
     "/remote-panel",
     "/settings",
@@ -72,6 +73,8 @@ const API_KEY_WHITELIST = [
     "/logs",
     "/remote",
     "/tunnel/status",
+    "/accounts",
+    "/usage",
 ]
 
 // API Key 认证中间件
