@@ -3,6 +3,7 @@
  */
 
 import { Hono } from "hono"
+import consola from "consola"
 import { isAuthenticated, getUserInfo, setAuth, clearAuth, startOAuthLogin } from "~/services/antigravity/login"
 import { accountManager } from "~/services/antigravity/account-manager"
 import { state } from "~/lib/state"
@@ -35,11 +36,13 @@ authRouter.get("/accounts", (c) => {
 
 // 登录（触发 OAuth 或设置 token）
 authRouter.post("/login", async (c) => {
+    consola.info("[Auth] POST /auth/login received")
     try {
         // 尝试解析 body，如果为空则触发 OAuth
         let body: { accessToken?: string; refreshToken?: string; email?: string; name?: string; provider?: string; force?: boolean } = {}
         try {
             const text = await c.req.text()
+            consola.info(`[Auth] Request body: ${text}`)
             if (text && text.trim()) {
                 body = JSON.parse(text)
             }
@@ -49,6 +52,7 @@ authRouter.post("/login", async (c) => {
 
         const provider = (body.provider || "antigravity").toLowerCase()
         const forceInteractive = body.force === true
+        consola.info(`[Auth] Provider: ${provider}, force: ${forceInteractive}`)
 
         if (provider === "copilot") {
             if (!forceInteractive) {
