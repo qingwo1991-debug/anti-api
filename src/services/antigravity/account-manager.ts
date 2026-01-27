@@ -545,8 +545,10 @@ class AccountManager {
     /**
      * 获取下一个可用账号
      * 🆕 粘性策略：使用队列顺序，队首优先
+     * @param forceRotate 是否强制轮换账号
+     * @param modelId 模型ID（用于检查特定配额，如画图模型需要 gimage 配额）
      */
-    async getNextAvailableAccount(forceRotate: boolean = false): Promise<{
+    async getNextAvailableAccount(forceRotate: boolean = false, modelId?: string): Promise<{
         accessToken: string
         projectId: string
         email: string
@@ -564,6 +566,24 @@ class AccountManager {
             return null
         }
 
+        // 🆕 检测是否是画图模型（需要 gimage 配额）
+        const isImageModel = modelId?.toLowerCase().includes("image") ?? false
+
+        // 🆕 检查账号是否有足够的画图配额
+        const hasImageQuota = async (accountId: string): Promise<boolean> => {
+            if (!isImageModel) return true // 非画图模型，不检查画图配额
+
+            const account = this.accounts.get(accountId)
+            if (!account) return false
+
+            // 获取该账号的 gimage 配额百分比
+            const { getAccountModelQuotaPercent } = await import("~/services/quota-aggregator")
+            const gimagePercent = await getAccountModelQuotaPercent(accountId, "gemini-3-pro-image")
+
+            // gimage 配额 > 0% 才可用
+            return gimagePercent > 0
+        }
+
         // 🆕 是否存在空闲账号（避免选中正在处理的账号）
         const hasIdleAccount = this.accountQueue.some((id) => {
             const account = this.accounts.get(id)
@@ -578,8 +598,13 @@ class AccountManager {
             const firstId = this.accountQueue[0]
             const firstAccount = this.accounts.get(firstId)
             if (firstAccount && (!firstAccount.rateLimitedUntil || firstAccount.rateLimitedUntil <= now)) {
+                // 🆕 检查画图配额
+                const hasQuota = await hasImageQuota(firstId)
                 if (hasIdleAccount && this.inFlightAccounts.has(firstId)) {
                     // Prefer idle accounts when available
+                } else if (!hasQuota && isImageModel) {
+                    // 画图模型但该账号没有画图配额，跳过
+                    consola.debug(`Account ${firstAccount.email} has no image quota, skipping...`)
                 } else {
                 // 刷新 token 如果需要
                 if (firstAccount.expiresAt > 0 && now > firstAccount.expiresAt - 5 * 60 * 1000) {
@@ -614,6 +639,13 @@ class AccountManager {
                 continue
             }
             if (hasIdleAccount && this.inFlightAccounts.has(accountId)) {
+                continue
+            }
+
+            // 🆕 检查画图配额
+            const hasQuota = await hasImageQuota(accountId)
+            if (!hasQuota && isImageModel) {
+                consola.debug(`Account ${account.email} has no image quota, skipping...`)
                 continue
             }
 

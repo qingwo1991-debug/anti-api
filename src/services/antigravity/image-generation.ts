@@ -350,7 +350,7 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
         let projectId: string
         let releaseAccountLock: (() => void) | null = null
 
-        const account = await accountManager.getNextAvailableAccount(currentAttempt > 1)  // 重试时强制轮换
+        const account = await accountManager.getNextAvailableAccount(currentAttempt > 1, request.model)  // 传入 modelId 以检查画图配额
         if (account) {
             accessToken = account.accessToken
             accountId = account.accountId
