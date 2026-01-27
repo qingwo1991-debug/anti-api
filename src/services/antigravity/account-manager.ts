@@ -566,22 +566,45 @@ class AccountManager {
             return null
         }
 
-        // 🆕 检测是否是画图模型（需要 gimage 配额）
-        const isImageModel = modelId?.toLowerCase().includes("image") ?? false
+        // 🆕 读取配额保留设置
+        const { getSetting } = await import("~/services/settings")
+        const reservePercent = getSetting("quotaReservePercent") || 0
 
-        // 🆕 检查账号是否有足够的画图配额
-        const hasImageQuota = async (accountId: string): Promise<boolean> => {
-            if (!isImageModel) return true // 非画图模型，不检查画图配额
+        // 🆕 检查账号是否有足够的配额（支持所有模型类型 + 配额保留）
+        const hasModelQuota = async (accountId: string): Promise<boolean> => {
+            if (!modelId) return true // 没有指定模型，不检查配额
 
             const account = this.accounts.get(accountId)
             if (!account) return false
 
-            // 获取该账号的 gimage 配额百分比
             const { getAccountModelQuotaPercent } = await import("~/services/quota-aggregator")
-            const gimagePercent = await getAccountModelQuotaPercent(accountId, "gemini-3-pro-image")
+            const modelLower = modelId.toLowerCase()
 
-            // gimage 配额 > 0% 才可用
-            return gimagePercent > 0
+            let quotaPercent = 0
+
+            // 根据模型类型检查对应配额
+            if (modelLower.includes("image")) {
+                // 画图模型：检查 gimage 配额
+                quotaPercent = await getAccountModelQuotaPercent(accountId, "gemini-3-pro-image")
+            } else if (modelLower.includes("claude") || modelLower.includes("opus") || modelLower.includes("sonnet") || modelLower.includes("haiku")) {
+                // Claude 模型：检查 claude_gpt 配额
+                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
+            } else if (modelLower.includes("gpt") || modelLower.includes("o1") || modelLower.includes("o3")) {
+                // GPT 模型：检查 claude_gpt 配额
+                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
+            } else if (modelLower.includes("gemini") && (modelLower.includes("pro") || modelLower.includes("1.5") || modelLower.includes("2.0"))) {
+                // Gemini Pro：检查 gpro 配额
+                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
+            } else if (modelLower.includes("gemini") && modelLower.includes("flash")) {
+                // Gemini Flash：检查 gflash 配额
+                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
+            } else {
+                // 其他模型：默认检查通用配额
+                quotaPercent = await getAccountModelQuotaPercent(accountId, modelId)
+            }
+
+            // 配额必须高于保留阈值
+            return quotaPercent > reservePercent
         }
 
         // 🆕 是否存在空闲账号（避免选中正在处理的账号）
@@ -598,13 +621,13 @@ class AccountManager {
             const firstId = this.accountQueue[0]
             const firstAccount = this.accounts.get(firstId)
             if (firstAccount && (!firstAccount.rateLimitedUntil || firstAccount.rateLimitedUntil <= now)) {
-                // 🆕 检查画图配额
-                const hasQuota = await hasImageQuota(firstId)
+                // 🆕 检查模型配额（包含配额保留）
+                const hasQuota = await hasModelQuota(firstId)
                 if (hasIdleAccount && this.inFlightAccounts.has(firstId)) {
                     // Prefer idle accounts when available
-                } else if (!hasQuota && isImageModel) {
-                    // 画图模型但该账号没有画图配额，跳过
-                    consola.debug(`Account ${firstAccount.email} has no image quota, skipping...`)
+                } else if (!hasQuota) {
+                    // 该账号配额不足（低于保留阈值），跳过
+                    consola.debug(`Account ${firstAccount.email} has insufficient quota for ${modelId} (reserve: ${reservePercent}%), skipping...`)
                 } else {
                 // 刷新 token 如果需要
                 if (firstAccount.expiresAt > 0 && now > firstAccount.expiresAt - 5 * 60 * 1000) {
@@ -642,10 +665,10 @@ class AccountManager {
                 continue
             }
 
-            // 🆕 检查画图配额
-            const hasQuota = await hasImageQuota(accountId)
-            if (!hasQuota && isImageModel) {
-                consola.debug(`Account ${account.email} has no image quota, skipping...`)
+            // 🆕 检查模型配额（包含配额保留）
+            const hasQuota = await hasModelQuota(accountId)
+            if (!hasQuota) {
+                consola.debug(`Account ${account.email} has insufficient quota for ${modelId} (reserve: ${reservePercent}%), skipping...`)
                 continue
             }
 

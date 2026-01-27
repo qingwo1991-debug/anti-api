@@ -960,7 +960,7 @@ export async function createChatCompletionWithOptions(
         projectId = account.projectId
         accountEmail = account.email
     } else {
-        const account = await accountManager.getNextAvailableAccount()
+        const account = await accountManager.getNextAvailableAccount(false, modelName)
         if (account) {
             accessToken = account.accessToken
             accountId = account.accountId
@@ -1043,7 +1043,7 @@ export async function* createChatCompletionStreamWithOptions(
         projectId = account.projectId
         accountEmail = account.email
     } else {
-        const account = await accountManager.getNextAvailableAccount()
+        const account = await accountManager.getNextAvailableAccount(false, modelName)
         if (account) {
             accessToken = account.accessToken
             accountId = account.accountId
