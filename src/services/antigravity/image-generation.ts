@@ -368,6 +368,11 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
         // Set log context for request logging (显示在控制台日志中)
         setRequestLogContext({ model: request.model, provider: "antigravity", account: accountEmail })
 
+        // Log request start
+        const accountDisplay = accountEmail ? ` >> ${accountEmail}` : ""
+        const retryInfo = currentAttempt > 1 ? ` (retry ${currentAttempt}/${maxAttempts})` : ""
+        console.log(`[${formatLogTime()}] ⏳ Generating image: ${request.model} > Antigravity${accountDisplay}${retryInfo}`)
+
         try {
             // Parse model configuration (with OpenAI parameter support)
             const imageConfig = parseImageModelConfig(request.model, request.size, request.quality)
@@ -417,7 +422,7 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
             if (allImages.length === 0 && all429Errors && currentAttempt < maxAttempts) {
                 // 所有任务都失败且是 429 错误，释放锁并重试下一个账号
                 if (releaseAccountLock) releaseAccountLock()
-                consola.warn(`Attempt ${currentAttempt}: All images failed with 429, switching account and retrying...`)
+                console.log(`\x1b[33m[${formatLogTime()}] 429: ${request.model} > Antigravity${accountDisplay} - switching account...\x1b[0m`)
                 lastError = new Error(errors[0] || "All images failed")
                 continue  // 重试下一个账号
             }
@@ -457,12 +462,13 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
             const is429Error = errorMsg.includes("429") || errorMsg.includes("resource exhausted") || errorMsg.includes("quota")
 
             if (is429Error && currentAttempt < maxAttempts) {
-                consola.warn(`Attempt ${currentAttempt}: Image generation failed with 429, switching account and retrying...`)
+                console.log(`\x1b[33m[${formatLogTime()}] 429: ${request.model} > Antigravity${accountDisplay} - ${errorMsg.substring(0, 100)}\x1b[0m`)
                 lastError = error as Error
                 continue  // 重试下一个账号
             }
 
-            // 非 429 错误或已达到最大重试次数，直接抛出
+            // 非 429 错误或已达到最大重试次数，记录错误并抛出
+            console.log(`\x1b[31m[${formatLogTime()}] ❌ ${request.model} > Antigravity${accountDisplay} - ${errorMsg.substring(0, 100)}\x1b[0m`)
             throw error
         }
     }
