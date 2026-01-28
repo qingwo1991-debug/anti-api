@@ -673,6 +673,14 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
             if (!account) {
                 continue
             }
+
+            // 🆕 添加配额检查（与 antigravity 一致）
+            const quotaPercent = getAccountModelQuotaPercent(entry.provider, entry.accountId, request.model)
+            if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                console.log(`[Router] Skipping ${entry.provider}/${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                continue
+            }
+
             const accountDisplay = account.login || account.email || entry.accountId
             setRequestLogContext({ model: request.model, provider: entry.provider, account: accountDisplay })
 
@@ -1067,6 +1075,14 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
             if (!account) {
                 continue
             }
+
+            // 🆕 添加配额检查（与 antigravity 一致）
+            const quotaPercent = getAccountModelQuotaPercent(entry.provider, entry.accountId, request.model)
+            if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                console.log(`[Router] Skipping ${entry.provider}/${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                continue
+            }
+
             const accountDisplay = account.login || account.email || entry.accountId
 
             let completion

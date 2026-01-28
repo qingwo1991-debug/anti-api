@@ -10,6 +10,9 @@ import { accountManager } from "./account-manager"
 import { state } from "~/lib/state"
 import { UpstreamError } from "~/lib/error"
 import { formatLogTime, setRequestLogContext } from "~/lib/logger"
+import { isAccountDisabled } from "~/services/routing/config"
+import { getAccountModelQuotaPercent } from "~/services/quota-aggregator"
+import { getSetting } from "~/services/settings"
 
 const ANTIGRAVITY_BASE_URLS = [
     "https://daily-cloudcode-pa.googleapis.com",
@@ -339,6 +342,7 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
     const maxAttempts = 3  // 最多重试3次
     let currentAttempt = 0
     let lastError: Error | null = null
+    const reservePercent = getSetting("quotaReservePercent") || 0
 
     while (currentAttempt < maxAttempts) {
         currentAttempt++
@@ -356,6 +360,19 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
             accountId = account.accountId
             accountEmail = account.email
             projectId = account.projectId
+
+            // 🆕 检查账号是否被手动禁用
+            if (isAccountDisabled("antigravity", accountId)) {
+                console.log(`[ImageGen] Skipping ${accountEmail}: account manually disabled`)
+                continue  // 跳过此账号，尝试下一个
+            }
+
+            // 🆕 检查配额是否低于保留阈值
+            const quotaPercent = getAccountModelQuotaPercent("antigravity", accountId, request.model)
+            if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                console.log(`[ImageGen] Skipping ${accountEmail}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                continue  // 跳过此账号，尝试下一个
+            }
 
             // Acquire account lock to prevent concurrent requests
             releaseAccountLock = await accountManager.acquireAccountLock(accountId)
