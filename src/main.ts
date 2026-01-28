@@ -46,6 +46,9 @@ function openBrowser(url: string): void {
     }
 }
 
+// 版本号 - 用于确认镜像版本
+const VERSION = "2.4.1"
+
 const start = defineCommand({
     meta: {
         name: "start",
@@ -114,6 +117,7 @@ const start = defineCommand({
 
         // 打印启动 banner
         const { logStartup, logStartupSuccess } = await import("./lib/logger")
+        console.log(`\n🚀 Anti-API v${VERSION} starting...`)
         logStartup(state.port)
 
         // 启动服务器
