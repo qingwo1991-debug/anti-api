@@ -1,6 +1,7 @@
 import type { ClaudeMessage, ClaudeTool } from "~/lib/translator"
 import { UpstreamError } from "~/lib/error"
 import { createChatCompletionWithOptions, createChatCompletionStreamWithOptions } from "~/services/antigravity/chat"
+import { generateImages } from "~/services/antigravity/image-generation"
 import { accountManager } from "~/services/antigravity/account-manager"
 import { createCodexCompletion } from "~/services/codex/chat"
 import { createCopilotCompletion } from "~/services/copilot/chat"
@@ -710,10 +711,61 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
     throw new RoutingError(`No account routing entries available for model "${request.model}"`, 400)
 }
 
+// 🆕 检测是否为画图模型
+function isImageModel(model: string): boolean {
+    return model.toLowerCase().includes("image")
+}
+
+// 🆕 从 messages 提取 prompt（用于画图）
+function extractPromptFromMessages(messages: ClaudeMessage[]): string {
+    // 找最后一个 user 消息作为 prompt
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i]
+        if (msg.role === "user") {
+            if (typeof msg.content === "string") {
+                return msg.content
+            }
+            if (Array.isArray(msg.content)) {
+                const textParts = msg.content
+                    .filter((block: any) => block.type === "text" && block.text)
+                    .map((block: any) => block.text)
+                return textParts.join("\n")
+            }
+        }
+    }
+    return ""
+}
+
 export async function createRoutedCompletion(request: RoutedRequest) {
     if (isHiddenCodexModel(request.model)) {
         throw new RoutingError("Model is not available", 400)
     }
+
+    // 🆕 画图模型特殊处理：调用 image-generation 而非 chat
+    if (isImageModel(request.model)) {
+        const prompt = extractPromptFromMessages(request.messages)
+        if (!prompt) {
+            throw new RoutingError("No prompt found in messages for image generation", 400)
+        }
+        console.log(`[Router] Detected image model ${request.model}, redirecting to image generation`)
+        const imageResult = await generateImages({
+            model: request.model,
+            prompt,
+            n: 1,
+            response_format: "b64_json"
+        })
+        // 转换为 chat completion 格式的响应
+        const imageData = imageResult.data[0]?.b64_json || ""
+        return {
+            contentBlocks: [{
+                type: "text" as const,
+                text: imageData ? `![Generated Image](data:image/png;base64,${imageData})` : "Image generation failed"
+            }],
+            stopReason: "end_turn",
+            usage: { inputTokens: 0, outputTokens: 0 }
+        }
+    }
+
     const config = loadRoutingConfig()
     if (isOfficialModel(request.model)) {
         const accountEntries = resolveAccountEntries(config, request.model)
@@ -1063,6 +1115,33 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
     if (isHiddenCodexModel(request.model)) {
         throw new RoutingError("Model is not available", 400)
     }
+
+    // 🆕 画图模型特殊处理：调用 image-generation 而非 chat
+    if (isImageModel(request.model)) {
+        const prompt = extractPromptFromMessages(request.messages)
+        if (!prompt) {
+            throw new RoutingError("No prompt found in messages for image generation", 400)
+        }
+        console.log(`[Router] Detected image model ${request.model}, redirecting to image generation (stream)`)
+        const imageResult = await generateImages({
+            model: request.model,
+            prompt,
+            n: 1,
+            response_format: "b64_json"
+        })
+        // 转换为流式 chat completion 格式
+        const imageData = imageResult.data[0]?.b64_json || ""
+        const imageText = imageData ? `![Generated Image](data:image/png;base64,${imageData})` : "Image generation failed"
+
+        yield buildMessageStart(request.model)
+        yield buildContentBlockStart(0, "text")
+        yield buildTextDelta(0, imageText)
+        yield buildContentBlockStop(0)
+        yield buildMessageDelta("end_turn", { inputTokens: 0, outputTokens: 0 })
+        yield buildMessageStop()
+        return
+    }
+
     const config = loadRoutingConfig()
 
     if (isOfficialModel(request.model)) {

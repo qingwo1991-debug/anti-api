@@ -47,7 +47,7 @@ function openBrowser(url: string): void {
 }
 
 // 版本号 - 用于确认镜像版本
-const VERSION = "2.4.4"
+const VERSION = "2.4.5"
 
 const start = defineCommand({
     meta: {
