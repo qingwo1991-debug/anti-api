@@ -366,9 +366,9 @@ function shouldSkipFlowEntry(
         return true
     }
 
-    // 🐛 修复：检查配额是否为 0%（无论 reservePercent 设置如何）
-    // 以及检查配额保留设置（只在有多个条目时生效）
-    if (!ignoreQuotaReserve && entriesLength > 1) {
+    // 🐛 修复：检查配额是否低于保留阈值
+    // 🆕 移除 entriesLength > 1 条件，单账户场景也需要检查配额
+    if (!ignoreQuotaReserve) {
         const reservePercent = getSetting("quotaReservePercent") || 0
         const quotaPercent = getAccountModelQuotaPercent(entry.provider, entry.accountId, entry.modelId)
         // 如果配额低于或等于保留阈值，跳过此账户
@@ -641,12 +641,11 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
 
                 // 🐛 修复：检查配额（使用请求的模型名，而非 entry.modelId）
-                if (entries.length > 1) {
-                    const quotaPercent = getAccountModelQuotaPercent("antigravity", entry.accountId, request.model)
-                    if (quotaPercent !== null && quotaPercent <= reservePercent) {
-                        console.log(`[Router] Skipping ${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
-                        continue
-                    }
+                // 🆕 移除 entries.length > 1 条件，单账户场景也需要检查配额
+                const quotaPercent = getAccountModelQuotaPercent("antigravity", entry.accountId, request.model)
+                if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                    console.log(`[Router] Skipping ${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                    continue
                 }
 
                 const accountDisplay = getAccountDisplay("antigravity", entry.accountId)
@@ -1031,12 +1030,11 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
                 if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
 
                 // 🐛 修复：检查配额（使用请求的模型名，而非 entry.modelId）
-                if (entries.length > 1) {
-                    const quotaPercent = getAccountModelQuotaPercent("antigravity", entry.accountId, request.model)
-                    if (quotaPercent !== null && quotaPercent <= reservePercent) {
-                        console.log(`[Router] Skipping ${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
-                        continue
-                    }
+                // 🆕 移除 entries.length > 1 条件，单账户场景也需要检查配额
+                const quotaPercent = getAccountModelQuotaPercent("antigravity", entry.accountId, request.model)
+                if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                    console.log(`[Router] Skipping ${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                    continue
                 }
 
                 yield* createChatCompletionStreamWithOptions({ ...request, model: request.model }, {

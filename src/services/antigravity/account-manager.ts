@@ -223,20 +223,9 @@ class AccountManager {
             this.hydrateFromAuthStore()
         }
 
-        // 如果没有已保存的账号，从 state 迁移当前账号
-        if (this.accounts.size === 0 && state.accessToken && state.refreshToken) {
-            const id = state.userEmail || "default"
-            this.accounts.set(id, {
-                id,
-                email: state.userEmail || "unknown",
-                accessToken: state.accessToken,
-                refreshToken: state.refreshToken,
-                expiresAt: state.tokenExpiresAt || 0,
-                projectId: state.cloudaicompanionProject,
-                rateLimitedUntil: null,
-                consecutiveFailures: 0,
-            })
-        }
+        // 🆕 修复：移除从 state 迁移账号的逻辑
+        // 不再自动 fallback 到 state.accessToken，强制用户通过正式流程添加账号
+        // 这样可以确保所有账号都经过禁用/配额检查
 
         // 🆕 确保干净启动：清除上次使用的账号记录
         this.lastUsedAccount = null
@@ -740,8 +729,9 @@ class AccountManager {
 
     /**
      * 按 ID 获取指定账号（并刷新 token）
+     * 🆕 增强：添加禁用检查和配额检查
      */
-    async getAccountById(accountId: string): Promise<{
+    async getAccountById(accountId: string, modelId?: string): Promise<{
         accessToken: string
         projectId: string
         email: string
@@ -754,9 +744,27 @@ class AccountManager {
         const account = this.accounts.get(accountId)
         if (!account) return null
 
+        // 🆕 检查是否被手动禁用
+        if (isAccountDisabled("antigravity", accountId)) {
+            console.log(`[AccountManager] Account ${accountId} is disabled`)
+            return null
+        }
+
         const now = Date.now()
         if (account.rateLimitedUntil && account.rateLimitedUntil > now) {
             return null
+        }
+
+        // 🆕 检查配额（如果提供了 modelId）
+        if (modelId) {
+            const { getAccountModelQuotaPercent } = await import("~/services/quota-aggregator")
+            const { getSetting } = await import("~/services/settings")
+            const reservePercent = getSetting("quotaReservePercent") || 0
+            const quotaPercent = getAccountModelQuotaPercent("antigravity", accountId, modelId)
+            if (quotaPercent !== null && quotaPercent <= reservePercent) {
+                console.log(`[AccountManager] Account ${accountId} has insufficient quota for ${modelId}: ${quotaPercent}% <= ${reservePercent}%`)
+                return null
+            }
         }
 
         if (account.expiresAt > 0 && now > account.expiresAt - 5 * 60 * 1000) {
