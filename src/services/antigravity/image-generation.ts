@@ -360,9 +360,8 @@ export async function generateImages(request: ImageGenerationRequest): Promise<I
             // Acquire account lock to prevent concurrent requests
             releaseAccountLock = await accountManager.acquireAccountLock(accountId)
         } else {
-            accessToken = await getAccessToken()
-            accountEmail = state.userEmail || undefined
-            projectId = state.cloudaicompanionProject || "unknown"
+            // 🆕 修复：没有可用账户时抛出错误，而不是使用 fallback token
+            throw new UpstreamError("antigravity", 429, "No available accounts for image generation (all disabled, insufficient quota, or rate limited)")
         }
 
         // Set log context for request logging (显示在控制台日志中)
