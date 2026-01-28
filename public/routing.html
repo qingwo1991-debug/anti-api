@@ -504,24 +504,24 @@
     <div class="max-w-7xl mx-auto space-y-6 main-container">
         <header class="flex items-center justify-between">
             <div>
-                <h1 class="text-3xl font-bold" style="color: var(--theme-text);">Routing</h1>
-                <p class="text-sm mt-1 font-bold" style="color: var(--theme-text-muted);">Build model chains with fallback on 429</p>
+                <h1 id="routing-title" class="text-3xl font-bold" style="color: var(--theme-text);">Routing</h1>
+                <p id="routing-subtitle" class="text-sm mt-1 font-bold" style="color: var(--theme-text-muted);">Build model chains with fallback on 429</p>
             </div>
             <div class="flex items-center gap-4">
                 <div class="flex items-center gap-2 text-xs">
                     <button id="tab-flow" onclick="setRoutingTab('flow')"
                         class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300">
-                        Flow Routing
+                        <span data-rt="flowRouting">Flow Routing</span>
                     </button>
                     <button id="tab-account" onclick="setRoutingTab('account')"
                         class="action-btn px-3 py-2 rounded-lg font-bold text-gray-400">
-                        Account Routing
+                        <span data-rt="accountRouting">Account Routing</span>
                     </button>
                 </div>
                 <div class="action-wrap inline-block">
                     <button onclick="window.location.href='/quota'" id="back-btn"
                         class="action-btn px-4 py-2 rounded-lg font-bold text-gray-300 text-sm">
-                        Back to Quota
+                        <span data-rt="backToQuota">Back to Quota</span>
                     </button>
                 </div>
             </div>
@@ -530,8 +530,8 @@
         <div id="flow-panel" class="grid gap-6 routing-panels" style="grid-template-columns: 1fr 1.5fr 1fr;">
             <aside class="panel rounded-2xl p-4 flex flex-col min-h-0">
                 <div class="mb-3 flex-shrink-0">
-                    <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);">Accounts</h2>
-                    <p class="text-xs mt-1" style="color: var(--theme-text-muted);">Drag a model block into the flow.</p>
+                    <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);" data-rt="accounts">Accounts</h2>
+                    <p class="text-xs mt-1" style="color: var(--theme-text-muted);" data-rt="accountsHint">Drag a model block into the flow.</p>
                 </div>
                 <div id="account-list" class="space-y-4 flex-1 min-h-0 overflow-y-auto panel-scroll"></div>
             </aside>
@@ -542,8 +542,8 @@
                     <!-- Flow Header -->
                     <div class="flex items-start justify-between gap-3 mb-4 flex-shrink-0">
                         <div>
-                            <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);">Flow</h2>
-                            <p class="text-xs mt-1" style="color: var(--theme-text-muted);">Match by model name in requests.</p>
+                            <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);" data-rt="flow">Flow</h2>
+                            <p class="text-xs mt-1" style="color: var(--theme-text-muted);" data-rt="flowHint">Match by model name in requests.</p>
                         </div>
                         <div class="flex items-center gap-2">
                             <input id="flow-name" placeholder="Model ID"
@@ -552,13 +552,13 @@
                                 autocomplete="off" />
                             <div class="action-wrap inline-block">
                                 <button onclick="newFlow()" id="new-btn"
-                                    class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300 text-xs">
+                                    class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300 text-xs" data-rt="new">
                                     New
                                 </button>
                             </div>
                             <div class="action-wrap inline-block">
                                 <button onclick="saveRouting()" id="save-btn"
-                                    class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300 text-xs">
+                                    class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300 text-xs" data-rt="save">
                                     Save
                                 </button>
                             </div>
@@ -575,8 +575,8 @@
             <!-- Saved Panel -->
             <aside class="panel rounded-2xl p-4 flex flex-col min-h-0">
                 <div class="mb-3 flex-shrink-0">
-                    <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);">Saved</h2>
-                    <p class="text-xs mt-1" style="color: var(--theme-text-muted);">Edit, rename, or delete saved flows.</p>
+                    <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);" data-rt="saved">Saved</h2>
+                    <p class="text-xs mt-1" style="color: var(--theme-text-muted);" data-rt="savedHint">Edit, rename, or delete saved flows.</p>
                 </div>
                 <div id="saved-list" class="space-y-3 flex-1 min-h-0 overflow-y-auto panel-scroll"></div>
             </aside>
@@ -585,8 +585,8 @@
         <div id="account-panel" class="grid gap-6 hidden routing-panels" style="grid-template-columns: 1fr 2fr;">
             <aside class="panel rounded-2xl p-4 flex flex-col min-h-0">
                 <div class="mb-3 flex-shrink-0">
-                    <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);">Models</h2>
-                    <p class="text-xs mt-1" style="color: var(--theme-text-muted);">Official model IDs only.</p>
+                    <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);" data-rt="models">Models</h2>
+                    <p class="text-xs mt-1" style="color: var(--theme-text-muted);" data-rt="modelsHint">Official model IDs only.</p>
                 </div>
                 <div id="account-model-list" class="space-y-2 flex-1 min-h-0 overflow-y-auto panel-scroll"></div>
             </aside>
@@ -594,38 +594,38 @@
             <section class="panel rounded-2xl p-6 flex flex-col min-h-0">
                 <div class="flex items-start justify-between gap-3 mb-4 flex-shrink-0">
                     <div>
-                        <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);">Account Chain</h2>
-                        <p class="text-xs mt-1" style="color: var(--theme-text-muted);">Ordered provider/account fallback.</p>
+                        <h2 class="text-sm uppercase tracking-[0.2em]" style="color: var(--theme-text-muted);" data-rt="accountChain">Account Chain</h2>
+                        <p class="text-xs mt-1" style="color: var(--theme-text-muted);" data-rt="accountChainHint">Ordered provider/account fallback.</p>
                     </div>
                     <div class="flex items-center gap-2 text-xs" style="color: var(--theme-text-muted);">
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input id="smart-switch" type="checkbox" class="toggle-switch">
-                            <span>Smart Switch</span>
+                            <span data-rt="smartSwitch">Smart Switch</span>
                         </label>
                         <button id="account-save-btn" onclick="saveAccountRouting()"
-                            class="action-btn px-3 py-2 rounded-lg font-bold text-xs">
+                            class="action-btn px-3 py-2 rounded-lg font-bold text-xs" data-rt="save">
                             Save
                         </button>
                     </div>
                 </div>
 
-                <div id="account-route-title" class="text-sm mb-3 flex-shrink-0" style="color: var(--theme-text-muted);">Select a model</div>
+                <div id="account-route-title" class="text-sm mb-3 flex-shrink-0" style="color: var(--theme-text-muted);" data-rt="selectModel">Select a model</div>
 
                 <div class="grid gap-3 mb-4 flex-shrink-0" style="grid-template-columns: 1fr 1fr auto;">
                     <select id="account-provider-select" class="select-field w-full">
-                        <option value="">Provider</option>
+                        <option value="" data-rt="provider">Provider</option>
                     </select>
                     <select id="account-account-select" class="select-field w-full">
-                        <option value="">Account</option>
+                        <option value="" data-rt="account">Account</option>
                     </select>
                     <button onclick="addAccountRouteEntry()"
-                        class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300 text-xs">
+                        class="action-btn px-3 py-2 rounded-lg font-bold text-gray-300 text-xs" data-rt="add">
                         Add
                     </button>
                 </div>
 
                 <div id="account-route-list" class="space-y-3 flex-1 min-h-0 overflow-y-auto panel-scroll"></div>
-                <div id="account-route-hint" class="text-xs mt-3 flex-shrink-0" style="color: var(--theme-text-muted);">
+                <div id="account-route-hint" class="text-xs mt-3 flex-shrink-0" style="color: var(--theme-text-muted);" data-rt="smartSwitchOn">
                     Smart Switch on: auto entries expand by account order.
                 </div>
             </section>
@@ -1744,6 +1744,7 @@
                 disabled: 'DISABLED',
                 smartSwitchOn: 'Smart Switch on: auto entries expand by account order.',
                 smartSwitchOff: 'Smart Switch off: only explicit account order is used.',
+                backToQuota: 'Back to Quota',
             },
             zh: {
                 title: '路由',
@@ -1786,6 +1787,7 @@
                 disabled: '已禁用',
                 smartSwitchOn: '智能切换开启：自动条目按账户顺序展开',
                 smartSwitchOff: '智能切换关闭：仅使用显式账户顺序',
+                backToQuota: '返回配额',
             }
         };
 
@@ -1797,7 +1799,22 @@
 
         function applyLanguage(lang) {
             routingLang = lang || 'en';
-            // 重新渲染以应用新语言
+
+            // 更新静态 HTML 元素
+            const titleEl = document.getElementById('routing-title');
+            const subtitleEl = document.getElementById('routing-subtitle');
+            if (titleEl) titleEl.textContent = rt('title');
+            if (subtitleEl) subtitleEl.textContent = rt('subtitle');
+
+            // 更新所有 data-rt 属性的元素
+            document.querySelectorAll('[data-rt]').forEach(el => {
+                const key = el.getAttribute('data-rt');
+                if (key) {
+                    el.textContent = rt(key);
+                }
+            });
+
+            // 重新渲染动态内容以应用新语言
             renderAccounts();
             renderFlow();
             renderSavedFlows();
