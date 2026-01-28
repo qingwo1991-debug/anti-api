@@ -1019,6 +1019,13 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
                 if (entry.accountId === "auto") {
                     throw new RoutingError(`Account routing entry for "${request.model}" cannot use auto without smart switch expansion`, 400)
                 }
+
+                // 🆕 最高优先级：检查账户是否被手动禁用
+                if (isAccountDisabled(entry.provider, entry.accountId)) {
+                    console.log(`[Router] Skipping ${entry.accountId}: account manually disabled`)
+                    continue
+                }
+
                 const isLimited = accountManager.isAccountRateLimited(entry.accountId) || isRouterRateLimited("antigravity", entry.accountId)
                 if (isLimited) continue
                 if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
