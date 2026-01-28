@@ -1674,6 +1674,27 @@
                 renderFlow();
                 renderAccountRouting();
             }
+            // 🆕 监听主题变化
+            if (e.key === 'anti-api-theme') {
+                applyTheme(e.newValue || 'midnight');
+            }
+        });
+
+        // 🆕 监听主题变化（从主页面同步）
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme || 'midnight');
+            document.body.style.background = 'var(--theme-bg)';
+        }
+
+        // 初始化时从 localStorage 读取主题
+        const savedTheme = localStorage.getItem('anti-api-theme') || 'midnight';
+        applyTheme(savedTheme);
+
+        // 监听来自父页面的主题消息（iframe 模式）
+        window.addEventListener('message', (e) => {
+            if (e.data && e.data.type === 'theme-change') {
+                applyTheme(e.data.theme);
+            }
         });
     </script>
 </body>

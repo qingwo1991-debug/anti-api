@@ -15,6 +15,7 @@ import { MIN_REQUEST_INTERVAL_MS } from "~/lib/constants"
 import { fetchAntigravityModels, pickResetTime } from "./quota-fetch"
 import { UpstreamError } from "~/lib/error"
 import { getDataDir } from "~/lib/data-dir"
+import { isAccountDisabled } from "~/services/routing/config"
 
 type RateLimitReason =
     | "quota_exhausted"
@@ -628,6 +629,10 @@ class AccountManager {
             const firstId = this.accountQueue[0]
             const firstAccount = this.accounts.get(firstId)
             if (firstAccount && (!firstAccount.rateLimitedUntil || firstAccount.rateLimitedUntil <= now)) {
+                // 🆕 最高优先级：检查账户是否被手动禁用
+                if (isAccountDisabled("antigravity", firstId)) {
+                    console.log(`[AccountManager] Skipping ${firstAccount.email}: account manually disabled`)
+                } else {
                 // 🆕 检查模型配额（包含配额保留）
                 const hasQuota = await hasModelQuota(firstId)
                 if (hasIdleAccount && this.inFlightAccounts.has(firstId)) {
@@ -655,6 +660,7 @@ class AccountManager {
                     accountId: firstAccount.id,
                 }
                 }
+                }
             }
         }
 
@@ -662,6 +668,12 @@ class AccountManager {
         for (const accountId of this.accountQueue) {
             const account = this.accounts.get(accountId)
             if (!account) continue
+
+            // 🆕 最高优先级：检查账户是否被手动禁用
+            if (isAccountDisabled("antigravity", accountId)) {
+                console.log(`[AccountManager] Skipping ${account.email}: account manually disabled`)
+                continue
+            }
 
             // 检查是否被限流
             if (account.rateLimitedUntil && account.rateLimitedUntil > now) {

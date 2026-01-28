@@ -1208,6 +1208,15 @@
 
             // Close dropdown
             document.getElementById('theme-dropdown').classList.remove('show');
+
+            // 🆕 通知 iframe 主题变化
+            document.querySelectorAll('iframe').forEach(iframe => {
+                try {
+                    iframe.contentWindow.postMessage({ type: 'theme-change', theme: themeName }, '*');
+                } catch (e) {
+                    // 跨域 iframe 无法通信，忽略
+                }
+            });
         }
 
         function initTheme() {
@@ -2100,16 +2109,21 @@
             const maskedName = provider === 'copilot' ? maskUsername(displayName) : maskEmail(displayName);
             const providerLogo = getProviderLogo(provider, cardId);
 
+            // 🆕 检查账户是否被禁用
+            const isDisabled = window._disabledAccounts && window._disabledAccounts.includes(`${provider}:${account.accountId}`);
+            const disabledBadge = isDisabled ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 ml-1">DISABLED</span>' : '';
+            const disabledStyle = isDisabled ? 'opacity-50' : '';
+
             return `
-                <div class="card-3d" data-provider="${provider}" data-card-id="${cardId}" data-account-id="${account.accountId}" data-display-name="${displayName}">
+                <div class="card-3d ${disabledStyle}" data-provider="${provider}" data-card-id="${cardId}" data-account-id="${account.accountId}" data-display-name="${displayName}">
                     <div class="card-inner rounded-2xl p-5">
                         <div class="flex items-center justify-between mb-4">
                             <div class="flex items-center gap-2">
                                 ${providerLogo}
-                                <div class="text-sm font-bold text-gray-300">${maskedName}</div>
+                                <div class="text-sm font-bold text-gray-300">${maskedName}${disabledBadge}</div>
                             </div>
                             <div class="flex items-center gap-2">
-                                <button onclick="deleteAccount('${account.accountId}', '${displayName}')" 
+                                <button onclick="deleteAccount('${account.accountId}', '${displayName}')"
                                         class="text-gray-600 hover:text-red-500 transition-colors text-xs px-1" title="Remove account">✕</button>
                             </div>
                         </div>
@@ -2177,6 +2191,15 @@
 
         async function fetchQuota(showToastMsg = false) {
             try {
+                // 🆕 先获取禁用账户列表
+                try {
+                    const routingRes = await fetch(`${API_BASE}/routing/config`);
+                    const routingData = await routingRes.json();
+                    window._disabledAccounts = routingData.config?.disabledAccounts || [];
+                } catch (e) {
+                    window._disabledAccounts = [];
+                }
+
                 const response = await fetch(`${API_BASE}/quota/json`);
                 const data = await response.json();
 
