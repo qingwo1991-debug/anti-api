@@ -61,6 +61,13 @@ function isEntryUsable(entry: RoutingEntry): boolean {
 
 // 🆕 Router 级别的 rate-limit 状态（独立于 accountManager）
 const routerRateLimits = new Map<string, number>()  // "provider:accountId" -> expiry timestamp
+// 🆕 Router 级别的配额缓存（5秒 TTL，减少配额检查开销）
+const routerQuotaCache = new Map<string, { percent: number | null; expiry: number }>()
+const ROUTER_QUOTA_CACHE_TTL = 5000 // 5秒
+// 🆕 配额黑名单（5分钟，避免重复检查 0% 配额账户）
+const quotaBlacklist = new Map<string, number>() // "provider:accountId:model" -> expiry
+const QUOTA_BLACKLIST_DURATION = 5 * 60 * 1000 // 5分钟
+
 const PROVIDER_ORDER: AuthProvider[] = ["antigravity", "codex", "copilot"]
 let officialModelIndex: Map<string, Set<AuthProvider>> | null = null
 const flowStickyStates = new Map<string, FlowStickyState>()
@@ -84,6 +91,33 @@ function isRouterRateLimited(provider: string, accountId: string): boolean {
 function markRouterRateLimited(provider: string, accountId: string, durationMs: number = 30000): void {
     const key = getRouterRateLimitKey(provider, accountId)
     routerRateLimits.set(key, Date.now() + durationMs)
+}
+
+function getQuotaCachedPercent(provider: string, accountId: string, model: string): number | null {
+    const key = `${provider}:${accountId}:${model}`
+    const cached = routerQuotaCache.get(key)
+    if (cached && Date.now() < cached.expiry) {
+        return cached.percent
+    }
+    const percent = getAccountModelQuotaPercent(provider as any, accountId, model)
+    routerQuotaCache.set(key, { percent, expiry: Date.now() + ROUTER_QUOTA_CACHE_TTL })
+    return percent
+}
+
+function isQuotaBlacklisted(provider: string, accountId: string, model: string): boolean {
+    const key = `${provider}:${accountId}:${model}`
+    const expiry = quotaBlacklist.get(key)
+    if (!expiry) return false
+    if (Date.now() > expiry) {
+        quotaBlacklist.delete(key)
+        return false
+    }
+    return true
+}
+
+function addToQuotaBlacklist(provider: string, accountId: string, model: string): void {
+    const key = `${provider}:${accountId}:${model}`
+    quotaBlacklist.set(key, Date.now() + QUOTA_BLACKLIST_DURATION)
 }
 
 function getFlowStickyState(flowKey: string, entriesLength: number): FlowStickyState {
@@ -371,11 +405,23 @@ function shouldSkipFlowEntry(
     // 🆕 移除 entriesLength > 1 条件，单账户场景也需要检查配额
     if (!ignoreQuotaReserve) {
         const reservePercent = getSetting("quotaReservePercent") || 0
-        const quotaPercent = getAccountModelQuotaPercent(entry.provider, entry.accountId, entry.modelId)
+
+        // 🆕 层次2：先检查黑名单，避免重复检查 0% 配额账户
+        if (isQuotaBlacklisted(entry.provider, entry.accountId, entry.modelId)) {
+            console.log(`[Router] Skipping ${entry.accountId}: ${entry.modelId} in quota blacklist`)
+            return true
+        }
+
+        // 🆕 层次1：使用缓存的配额检查，减少开销
+        const quotaPercent = getQuotaCachedPercent(entry.provider, entry.accountId, entry.modelId)
         // 如果配额低于或等于保留阈值，跳过此账户
         // 当 reservePercent = 0 时，只有 quotaPercent = 0% 才会被跳过
         if (quotaPercent !== null && quotaPercent <= reservePercent) {
             console.log(`[Router] Skipping ${entry.accountId}: ${entry.modelId} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+            // 🆕 层次2：0% 配额账户加入黑名单 5 分钟
+            if (quotaPercent === 0) {
+                addToQuotaBlacklist(entry.provider, entry.accountId, entry.modelId)
+            }
             return true
         }
     }
@@ -643,9 +689,21 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
 
                 // 🐛 修复：检查配额（使用请求的模型名，而非 entry.modelId）
                 // 🆕 移除 entries.length > 1 条件，单账户场景也需要检查配额
-                const quotaPercent = getAccountModelQuotaPercent("antigravity", entry.accountId, request.model)
+
+                // 🆕 层次2：先检查黑名单，避免重复检查 0% 配额账户
+                if (isQuotaBlacklisted("antigravity", entry.accountId, request.model)) {
+                    console.log(`[Router] Skipping ${entry.accountId}: ${request.model} in quota blacklist`)
+                    continue
+                }
+
+                // 🆕 层次1：使用缓存的配额检查，减少开销
+                const quotaPercent = getQuotaCachedPercent("antigravity", entry.accountId, request.model)
                 if (quotaPercent !== null && quotaPercent <= reservePercent) {
                     console.log(`[Router] Skipping ${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                    // 🆕 层次2：0% 配额账户加入黑名单 5 分钟
+                    if (quotaPercent === 0) {
+                        addToQuotaBlacklist("antigravity", entry.accountId, request.model)
+                    }
                     continue
                 }
 
@@ -675,9 +733,21 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
             }
 
             // 🆕 添加配额检查（与 antigravity 一致）
-            const quotaPercent = getAccountModelQuotaPercent(entry.provider, entry.accountId, request.model)
+
+            // 🆕 层次2：先检查黑名单，避免重复检查 0% 配额账户
+            if (isQuotaBlacklisted(entry.provider, entry.accountId, request.model)) {
+                console.log(`[Router] Skipping ${entry.provider}/${entry.accountId}: ${request.model} in quota blacklist`)
+                continue
+            }
+
+            // 🆕 层次1：使用缓存的配额检查，减少开销
+            const quotaPercent = getQuotaCachedPercent(entry.provider, entry.accountId, request.model)
             if (quotaPercent !== null && quotaPercent <= reservePercent) {
                 console.log(`[Router] Skipping ${entry.provider}/${entry.accountId}: ${request.model} quota ${quotaPercent}% <= reserve ${reservePercent}%`)
+                // 🆕 层次2：0% 配额账户加入黑名单 5 分钟
+                if (quotaPercent === 0) {
+                    addToQuotaBlacklist(entry.provider, entry.accountId, request.model)
+                }
                 continue
             }
 
