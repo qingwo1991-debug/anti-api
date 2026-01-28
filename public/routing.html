@@ -743,9 +743,38 @@
         let activeFlowId = null;
         let quotaData = null;  // Store quota data for model rendering
         let accountRouting = { smartSwitch: false, routes: [] };
+        let disabledAccounts = [];  // 🆕 禁用的账户列表
         let officialModels = [];
         let selectedAccountModelId = null;
         let activeRoutingTab = 'flow';
+
+        // 🆕 检查账户是否被禁用
+        function isAccountDisabled(provider, accountId) {
+            const key = `${provider}:${accountId}`;
+            return disabledAccounts.includes(key);
+        }
+
+        // 🆕 切换账户禁用状态
+        async function toggleAccountDisabled(provider, accountId, event) {
+            if (event) event.stopPropagation();
+            try {
+                const res = await apiPost('/routing/toggle-account', { provider, accountId });
+                if (res.success) {
+                    const key = `${provider}:${accountId}`;
+                    if (res.disabled) {
+                        if (!disabledAccounts.includes(key)) {
+                            disabledAccounts.push(key);
+                        }
+                    } else {
+                        const idx = disabledAccounts.indexOf(key);
+                        if (idx >= 0) disabledAccounts.splice(idx, 1);
+                    }
+                    renderAccounts();
+                }
+            } catch (error) {
+                console.error('Failed to toggle account:', error);
+            }
+        }
 
         // Privacy masking (synced from settings via localStorage cache)
         function getPrivacyMode() {
@@ -1045,6 +1074,7 @@
             flows = Array.isArray(data.config?.flows) ? data.config.flows : [];
             quotaData = data.quota || null;
             accountRouting = data.config?.accountRouting || { smartSwitch: false, routes: [] };
+            disabledAccounts = data.config?.disabledAccounts || [];  // 🆕 加载禁用账户列表
             officialModels = collectOfficialModels(models);
 
             const savedFlowId = localStorage.getItem(STORAGE_KEYS.activeFlow);
@@ -1214,6 +1244,9 @@
                     const card = document.createElement('div');
                     card.className = 'space-y-2';
 
+                    // 🆕 检查账户是否被禁用
+                    const accountDisabled = isAccountDisabled(provider, account.id);
+
                     // Get quota percentage for this account (quotaPercent = REMAINING percentage, not used)
                     const remaining = getAccountQuota(provider, account.id);
 
@@ -1226,12 +1259,21 @@
 
                     const header = document.createElement('div');
                     header.className = 'flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity';
+                    // 🆕 禁用的账户显示特殊样式
+                    const disabledBadge = accountDisabled ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 ml-2">DISABLED</span>' : '';
+                    const nameStyle = accountDisabled ? 'opacity-50 line-through' : '';
                     header.innerHTML = `
                         <div class="flex items-center gap-2">
                             <span class="text-[10px] text-gray-500 transition-transform ${isCollapsed ? '' : 'rotate-90'}" data-toggle-icon>▶</span>
-                            <span class="text-sm font-semibold text-gray-200">${maskedDisplayName}</span>
+                            <span class="text-sm font-semibold text-gray-200 ${nameStyle}">${maskedDisplayName}</span>
+                            ${disabledBadge}
                         </div>
                         <div class="flex items-center gap-2">
+                            <button onclick="toggleAccountDisabled('${provider}', '${account.id}', event)"
+                                class="text-[9px] px-2 py-0.5 rounded ${accountDisabled ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}"
+                                title="${accountDisabled ? 'Enable this account' : 'Disable this account'}">
+                                ${accountDisabled ? 'Enable' : 'Disable'}
+                            </button>
                             <span class="account-pill text-[10px] px-2 py-0.5 rounded-full">${provider}</span>
                         </div>
                     `;

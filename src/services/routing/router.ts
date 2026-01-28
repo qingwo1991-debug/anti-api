@@ -7,7 +7,7 @@ import { createCodexCompletion } from "~/services/codex/chat"
 import { createCopilotCompletion } from "~/services/copilot/chat"
 import { authStore } from "~/services/auth/store"
 import type { ProviderAccount } from "~/services/auth/types"
-import { loadRoutingConfig, type RoutingEntry, type RoutingConfig, type AccountRoutingEntry } from "./config"
+import { loadRoutingConfig, isAccountDisabled, type RoutingEntry, type RoutingConfig, type AccountRoutingEntry } from "./config"
 import { getProviderModels, isHiddenCodexModel } from "./models"
 import { buildMessageStart, buildContentBlockStart, buildTextDelta, buildInputJsonDelta, buildContentBlockStop, buildMessageDelta, buildMessageStop } from "~/lib/translator"
 import { formatLogTime, setRequestLogContext } from "~/lib/logger"
@@ -360,6 +360,12 @@ function shouldSkipFlowEntry(
     const ignoreRateLimit = options.ignoreRateLimit ?? false
     const ignoreQuotaReserve = options.ignoreQuotaReserve ?? false
 
+    // 🆕 最高优先级：检查账户是否被手动禁用
+    if (isAccountDisabled(entry.provider, entry.accountId)) {
+        console.log(`[Router] Skipping ${entry.accountId}: account manually disabled`)
+        return true
+    }
+
     // 🐛 修复：检查配额是否为 0%（无论 reservePercent 设置如何）
     // 以及检查配额保留设置（只在有多个条目时生效）
     if (!ignoreQuotaReserve && entriesLength > 1) {
@@ -623,6 +629,13 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
                 if (entry.accountId === "auto") {
                     throw new RoutingError(`Account routing entry for "${request.model}" cannot use auto without smart switch expansion`, 400)
                 }
+
+                // 🆕 最高优先级：检查账户是否被手动禁用
+                if (isAccountDisabled(entry.provider, entry.accountId)) {
+                    console.log(`[Router] Skipping ${entry.accountId}: account manually disabled`)
+                    continue
+                }
+
                 const isLimited = accountManager.isAccountRateLimited(entry.accountId) || isRouterRateLimited("antigravity", entry.accountId)
                 if (isLimited) continue
                 if (entries.length > 1 && accountManager.isAccountInFlight(entry.accountId)) continue
@@ -647,6 +660,12 @@ async function createAccountCompletionWithEntries(request: RoutedRequest, entrie
             }
 
             if (authStore.isRateLimited(entry.provider, entry.accountId)) {
+                continue
+            }
+
+            // 🆕 检查非 antigravity 账户是否被手动禁用
+            if (isAccountDisabled(entry.provider, entry.accountId)) {
+                console.log(`[Router] Skipping ${entry.provider}/${entry.accountId}: account manually disabled`)
                 continue
             }
 
@@ -1022,6 +1041,12 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
             }
 
             if (authStore.isRateLimited(entry.provider, entry.accountId)) {
+                continue
+            }
+
+            // 🆕 检查非 antigravity 账户是否被手动禁用
+            if (isAccountDisabled(entry.provider, entry.accountId)) {
+                console.log(`[Router] Skipping ${entry.provider}/${entry.accountId}: account manually disabled`)
                 continue
             }
 
