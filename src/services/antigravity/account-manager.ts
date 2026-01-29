@@ -62,10 +62,14 @@ function parseRateLimitReason(statusCode: number, errorText: string): RateLimitR
                 }
             }
 
-            // 🆕 RESOURCE_EXHAUSTED 状态但没有明确的 QUOTA_EXHAUSTED detail
-            // 默认假设是速率限制而非配额耗尽
+            // 🔧 修复：RESOURCE_EXHAUSTED 状态需要检查 message 内容
+            // 如果 message 包含 "quota"，则是配额耗尽；否则才是速率限制
             const status = json?.error?.status
             if (status === "RESOURCE_EXHAUSTED") {
+                // 例如: "Resource has been exhausted (e.g. check quota)." → 配额耗尽
+                if (msgLower.includes("quota")) {
+                    return "quota_exhausted"
+                }
                 return "rate_limit_exceeded"
             }
         } catch {

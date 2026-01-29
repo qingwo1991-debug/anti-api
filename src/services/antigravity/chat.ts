@@ -91,11 +91,20 @@ function isQuotaExhaustedErrorText(errorText: string): boolean {
                     if (detail?.reason === "QUOTA_EXHAUSTED") return true
                 }
             }
-            const message = json?.error?.message
-            if (typeof message === "string") {
-                const lower = message.toLowerCase()
-                if (lower.includes("quota") && lower.includes("reset")) return true
+
+            // 🔧 修复：检查 status 和 message
+            const status = json?.error?.status
+            const message = json?.error?.message || ""
+            const lower = message.toLowerCase()
+
+            // RESOURCE_EXHAUSTED + 包含 "quota" = 配额耗尽
+            // 例如: {"error": {"status": "RESOURCE_EXHAUSTED", "message": "Resource has been exhausted (e.g. check quota)."}}
+            if (status === "RESOURCE_EXHAUSTED" && lower.includes("quota")) {
+                return true
             }
+
+            // 原有逻辑保留
+            if (lower.includes("quota") && lower.includes("reset")) return true
         } catch {
             // ignore parse errors
         }
