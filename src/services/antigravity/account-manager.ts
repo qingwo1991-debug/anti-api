@@ -136,6 +136,109 @@ function defaultRateLimitMs(reason: RateLimitReason, failures: number): number {
 
 const RESET_TIME_BUFFER_MS = 2000
 
+/**
+ * 根据模型ID判断模型类别
+ * 用于分开管理不同类型模型的限流状态
+ */
+export function getModelCategory(modelId?: string): ModelCategory {
+    if (!modelId) return "unknown"
+    const lower = modelId.toLowerCase()
+    // 画图模型
+    if (lower.includes("image") || lower.includes("imagen")) {
+        return "image"
+    }
+    // LLM 模型（Claude, GPT, Gemini 等）
+    if (lower.includes("claude") || lower.includes("gpt") ||
+        lower.includes("gemini") || lower.includes("sonnet") ||
+        lower.includes("opus") || lower.includes("flash") ||
+        lower.includes("pro")) {
+        return "llm"
+    }
+    return "unknown"
+}
+
+/**
+ * 从 quota-aggregator 缓存获取模型的重置时间
+ */
+async function getCachedResetTime(accountId: string, modelId?: string): Promise<number | null> {
+    if (!modelId) return null
+
+    try {
+        const { default: quotaCache } = await import("~/services/quota-aggregator")
+        // 使用内部函数获取缓存的 bars
+        const { getAccountModelQuotaPercent } = await import("~/services/quota-aggregator")
+
+        // 尝试从缓存文件读取 resetTime
+        const { existsSync, readFileSync } = await import("fs")
+        const { join } = await import("path")
+        const { getDataDir } = await import("~/lib/data-dir")
+
+        const cacheFile = join(getDataDir(), "quota-cache.json")
+        if (!existsSync(cacheFile)) return null
+
+        const cache = JSON.parse(readFileSync(cacheFile, "utf-8"))
+        const key = `antigravity:${accountId}`
+        const entry = cache[key]
+        if (!entry?.bars) return null
+
+        // 根据模型类别找对应的 resetTime
+        const category = getModelCategory(modelId)
+        let targetKey: string | null = null
+
+        if (category === "image") {
+            targetKey = "gimage"
+        } else if (category === "llm") {
+            // 根据具体模型找对应的配额 key
+            const lower = modelId.toLowerCase()
+            if (lower.includes("claude") || lower.includes("gpt")) {
+                targetKey = "claude_gpt"
+            } else if (lower.includes("pro")) {
+                targetKey = "gpro"
+            } else if (lower.includes("flash")) {
+                targetKey = "gflash"
+            }
+        }
+
+        if (targetKey) {
+            const bar = entry.bars.find((b: any) => b.key === targetKey)
+            if (bar?.resetTime) {
+                const resetMs = Date.parse(bar.resetTime)
+                if (Number.isFinite(resetMs)) {
+                    return resetMs + RESET_TIME_BUFFER_MS
+                }
+            }
+        }
+
+        // 如果没找到特定的，返回所有 bar 中最早的 resetTime
+        let earliest: number | null = null
+        for (const bar of entry.bars) {
+            if (bar.resetTime) {
+                const ms = Date.parse(bar.resetTime)
+                if (Number.isFinite(ms) && (earliest === null || ms < earliest)) {
+                    earliest = ms
+                }
+            }
+        }
+        return earliest ? earliest + RESET_TIME_BUFFER_MS : null
+    } catch {
+        return null
+    }
+}
+
+/**
+ * 模型类别 - 用于分开管理不同类型模型的限流状态
+ * 画图模型和LLM模型配额是分开计算的
+ */
+export type ModelCategory = "llm" | "image" | "unknown"
+
+/**
+ * 按模型类别的限流信息
+ */
+export interface CategoryRateLimit {
+    until: number       // 限流过期时间戳
+    failures: number    // 该类别的连续失败次数
+}
+
 export interface Account {
     id: string
     email: string
@@ -143,7 +246,9 @@ export interface Account {
     refreshToken: string
     expiresAt: number
     projectId: string | null
-    // 限流状态
+    // 🆕 按模型类别分开的限流状态（画图和LLM分开）
+    categoryRateLimits: Map<ModelCategory, CategoryRateLimit>
+    // 保留全局限流（用于非模型相关的错误，如认证失败）
     rateLimitedUntil: number | null
     consecutiveFailures: number
 }
@@ -186,6 +291,7 @@ class AccountManager {
                 refreshToken: stored.refreshToken || "",
                 expiresAt: stored.expiresAt || 0,
                 projectId: stored.projectId || null,
+                categoryRateLimits: new Map(),
                 rateLimitedUntil: null,
                 consecutiveFailures: 0,
             })
@@ -203,6 +309,7 @@ class AccountManager {
                     for (const acc of data.accounts) {
                         this.accounts.set(acc.id, {
                             ...acc,
+                            categoryRateLimits: new Map(),
                             rateLimitedUntil: null,
                             consecutiveFailures: 0,
                         })
@@ -263,9 +370,10 @@ class AccountManager {
     /**
      * 添加账号
      */
-    addAccount(account: Omit<Account, "rateLimitedUntil" | "consecutiveFailures">): void {
+    addAccount(account: Omit<Account, "rateLimitedUntil" | "consecutiveFailures" | "categoryRateLimits">): void {
         this.accounts.set(account.id, {
             ...account,
+            categoryRateLimits: new Map(),
             rateLimitedUntil: null,
             consecutiveFailures: 0,
         })
@@ -394,19 +502,32 @@ class AccountManager {
     }
 
     /**
-     * 标记账号为限流状态
+     * 标记账号为限流状态（支持按模型类别分开限流）
      */
-    markRateLimited(accountId: string, durationMs: number = 60000): void {
+    markRateLimited(accountId: string, durationMs: number = 60000, modelId?: string): void {
         const account = this.accounts.get(accountId)
         if (account) {
-            account.rateLimitedUntil = Date.now() + durationMs
-            account.consecutiveFailures++
-            consola.warn(`Account ${account.email} rate limited for ${durationMs / 1000}s (failures: ${account.consecutiveFailures})`)
+            const category = getModelCategory(modelId)
+            if (category !== "unknown" && modelId) {
+                // 按模型类别限流
+                const existing = account.categoryRateLimits.get(category) || { until: 0, failures: 0 }
+                account.categoryRateLimits.set(category, {
+                    until: Date.now() + durationMs,
+                    failures: existing.failures + 1,
+                })
+                consola.warn(`Account ${account.email} [${category}] rate limited for ${durationMs / 1000}s (failures: ${existing.failures + 1})`)
+            } else {
+                // 全局限流
+                account.rateLimitedUntil = Date.now() + durationMs
+                account.consecutiveFailures++
+                consola.warn(`Account ${account.email} rate limited for ${durationMs / 1000}s (failures: ${account.consecutiveFailures})`)
+            }
         }
     }
 
     /**
      * 根据错误信息标记账号限流
+     * 🆕 优化：使用缓存的 resetTime 进行精确锁定，而非固定时间
      */
     async markRateLimitedFromError(
         accountId: string,
@@ -421,60 +542,154 @@ class AccountManager {
 
         const reason = parseRateLimitReason(statusCode, errorText)
         const retryDelayMs = parseRetryDelay(errorText, retryAfterHeader)
-        account.consecutiveFailures++
+        const category = getModelCategory(modelId)
+        const now = Date.now()
 
         let durationMs = 0
         let rateLimitedUntil: number | null = null
 
-        // 🆕 proj-1 风格：不在每次 429 时检查配额（避免额外 API 调用消耗速率限制）
-        // 如果没有明确的 retry delay，直接假设是速率限制并应用短暂退避
-        if (retryDelayMs !== null) {
-            // API 返回了明确的重试延迟
+        // 🆕 优化1: 对于配额耗尽，优先使用缓存的 resetTime
+        if (reason === "quota_exhausted" && modelId) {
+            const cachedResetMs = await getCachedResetTime(accountId, modelId)
+            if (cachedResetMs && cachedResetMs > now) {
+                durationMs = cachedResetMs - now
+                rateLimitedUntil = cachedResetMs
+                consola.info(`📅 Using cached resetTime for ${account.email} [${category}]: ${Math.ceil(durationMs / 1000)}s`)
+            }
+        }
+
+        // 🆕 优化2: API 返回的 retry delay 优先级高于默认值
+        if (!rateLimitedUntil && retryDelayMs !== null) {
             durationMs = Math.max(retryDelayMs + 500, 2000)
-            rateLimitedUntil = Date.now() + durationMs
-        } else if (statusCode === 429) {
-            // 没有明确延迟的 429 = 假设是速率限制，应用短暂退避
-            // 不调用 fetchAntigravityModels 避免消耗速率限制
-            durationMs = 10000 // 10 秒短暂退避（增加以避免快速重试）
-            rateLimitedUntil = Date.now() + durationMs
+            rateLimitedUntil = now + durationMs
         }
 
+        // 🆕 优化3: 速率限制使用更短的默认值
+        if (!rateLimitedUntil && statusCode === 429) {
+            if (reason === "rate_limit_exceeded") {
+                // 速率限制：2-4秒短暂退避
+                durationMs = 2000 + Math.random() * 2000
+            } else if (reason === "model_capacity_exhausted") {
+                // 模型容量：5秒
+                durationMs = 5000
+            } else {
+                // 其他429：10秒
+                durationMs = 10000
+            }
+            rateLimitedUntil = now + durationMs
+        }
+
+        // 默认值回退
         if (!rateLimitedUntil) {
-            durationMs = defaultRateLimitMs(reason, account.consecutiveFailures)
-            rateLimitedUntil = Date.now() + durationMs
+            const failures = category !== "unknown"
+                ? (account.categoryRateLimits.get(category)?.failures || 0) + 1
+                : account.consecutiveFailures + 1
+            durationMs = defaultRateLimitMs(reason, failures)
+            rateLimitedUntil = now + durationMs
         }
 
+        // 应用最大限制
         const maxDurationMs = options?.maxDurationMs
         if (maxDurationMs && reason !== "quota_exhausted" && durationMs > maxDurationMs) {
             durationMs = maxDurationMs
-            rateLimitedUntil = Date.now() + durationMs
+            rateLimitedUntil = now + durationMs
         }
 
-        account.rateLimitedUntil = rateLimitedUntil
-        consola.warn(
-            `Account ${account.email} rate limited (${reason}) for ${Math.ceil(durationMs / 1000)}s (failures: ${account.consecutiveFailures})`
-        )
+        // 🆕 按模型类别分开记录限流状态
+        if (category !== "unknown" && modelId) {
+            const existing = account.categoryRateLimits.get(category) || { until: 0, failures: 0 }
+            account.categoryRateLimits.set(category, {
+                until: rateLimitedUntil,
+                failures: existing.failures + 1,
+            })
+            consola.warn(
+                `Account ${account.email} [${category}] rate limited (${reason}) for ${Math.ceil(durationMs / 1000)}s`
+            )
+        } else {
+            account.rateLimitedUntil = rateLimitedUntil
+            account.consecutiveFailures++
+            consola.warn(
+                `Account ${account.email} rate limited (${reason}) for ${Math.ceil(durationMs / 1000)}s (failures: ${account.consecutiveFailures})`
+            )
+        }
+
         return { reason, durationMs }
     }
 
     /**
-     * 标记账号成功
+     * 标记账号成功（清除对应类别的限流状态）
      */
-    markSuccess(accountId: string): void {
+    markSuccess(accountId: string, modelId?: string): void {
         const account = this.accounts.get(accountId)
         if (account) {
-            account.rateLimitedUntil = null
-            account.consecutiveFailures = 0
+            const category = getModelCategory(modelId)
+            if (category !== "unknown" && modelId) {
+                // 清除该类别的限流
+                account.categoryRateLimits.delete(category)
+            } else {
+                // 清除全局限流
+                account.rateLimitedUntil = null
+                account.consecutiveFailures = 0
+            }
         }
     }
 
     /**
-     * 检查账号是否被限流
+     * 检查账号是否被限流（支持按模型类别检查）
      */
-    isAccountRateLimited(accountId: string): boolean {
+    isAccountRateLimited(accountId: string, modelId?: string): boolean {
         const account = this.accounts.get(accountId)
         if (!account) return false
-        return account.rateLimitedUntil !== null && account.rateLimitedUntil > Date.now()
+
+        const now = Date.now()
+
+        // 检查全局限流
+        if (account.rateLimitedUntil !== null && account.rateLimitedUntil > now) {
+            return true
+        }
+
+        // 检查特定模型类别的限流
+        if (modelId) {
+            const category = getModelCategory(modelId)
+            if (category !== "unknown") {
+                const catLimit = account.categoryRateLimits.get(category)
+                if (catLimit && catLimit.until > now) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    /**
+     * 获取账号对特定模型的剩余限流时间（毫秒）
+     * 返回 0 表示未被限流
+     */
+    getRateLimitRemaining(accountId: string, modelId?: string): number {
+        const account = this.accounts.get(accountId)
+        if (!account) return 0
+
+        const now = Date.now()
+        let remaining = 0
+
+        // 检查全局限流
+        if (account.rateLimitedUntil !== null && account.rateLimitedUntil > now) {
+            remaining = Math.max(remaining, account.rateLimitedUntil - now)
+        }
+
+        // 检查特定模型类别的限流
+        if (modelId) {
+            const category = getModelCategory(modelId)
+            if (category !== "unknown") {
+                const catLimit = account.categoryRateLimits.get(category)
+                if (catLimit && catLimit.until > now) {
+                    remaining = Math.max(remaining, catLimit.until - now)
+                }
+            }
+        }
+
+        return remaining
     }
 
     /**
@@ -502,17 +717,31 @@ class AccountManager {
      * 🆕 乐观重置：清除所有账户的限流状态
      * 用于当所有账户都被限流但等待时间很短时，解决时序竞争条件
      */
-    clearAllRateLimits(): void {
+    clearAllRateLimits(modelId?: string): void {
         let count = 0
+        const category = getModelCategory(modelId)
+
         for (const account of this.accounts.values()) {
-            if (account.rateLimitedUntil !== null) {
-                account.rateLimitedUntil = null
-                account.consecutiveFailures = 0
-                count++
+            if (modelId && category !== "unknown") {
+                // 只清除特定类别的限流
+                if (account.categoryRateLimits.has(category)) {
+                    account.categoryRateLimits.delete(category)
+                    count++
+                }
+            } else {
+                // 清除全局限流和所有类别限流
+                if (account.rateLimitedUntil !== null) {
+                    account.rateLimitedUntil = null
+                    account.consecutiveFailures = 0
+                    count++
+                }
+                if (account.categoryRateLimits.size > 0) {
+                    account.categoryRateLimits.clear()
+                }
             }
         }
         if (count > 0) {
-            consola.warn(`🔄 Optimistic reset: Cleared rate limits for ${count} account(s)`)
+            consola.warn(`🔄 Optimistic reset: Cleared rate limits for ${count} account(s)${modelId ? ` [${category}]` : ""}`)
         }
     }
 
@@ -520,15 +749,28 @@ class AccountManager {
      * 🆕 获取所有账户中最短的限流等待时间（毫秒）
      * 返回 null 表示没有账户被限流
      */
-    getMinRateLimitWait(): number | null {
+    getMinRateLimitWait(modelId?: string): number | null {
         const now = Date.now()
         let minWait: number | null = null
+        const category = getModelCategory(modelId)
 
         for (const account of this.accounts.values()) {
+            // 检查全局限流
             if (account.rateLimitedUntil !== null && account.rateLimitedUntil > now) {
                 const wait = account.rateLimitedUntil - now
                 if (minWait === null || wait < minWait) {
                     minWait = wait
+                }
+            }
+
+            // 检查特定类别的限流
+            if (modelId && category !== "unknown") {
+                const catLimit = account.categoryRateLimits.get(category)
+                if (catLimit && catLimit.until > now) {
+                    const wait = catLimit.until - now
+                    if (minWait === null || wait < minWait) {
+                        minWait = wait
+                    }
                 }
             }
         }
