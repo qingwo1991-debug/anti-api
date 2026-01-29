@@ -510,8 +510,20 @@ function parseApiResponse(rawResponse: string): ChatResponse {
 }
 
 // 429 is handled separately - it's account-specific, not endpoint-specific
-function shouldTryNextEndpoint(statusCode: number): boolean {
-    return statusCode === 408 || statusCode === 404 || statusCode >= 500
+// 🆕 优化 404 处理：区分 endpoint 不存在和模型/权限问题
+function shouldTryNextEndpoint(statusCode: number, errorText?: string): boolean {
+    if (statusCode === 408 || statusCode >= 500) return true
+
+    if (statusCode === 404) {
+        const lower = (errorText || "").toLowerCase()
+        // 模型不存在或权限问题 - 不应尝试下一个 endpoint
+        if (lower.includes("not found") && !lower.includes("endpoint")) {
+            return false
+        }
+        // Endpoint 不存在 - 尝试下一个
+        return true
+    }
+    return false
 }
 
 async function sendRequestSse(
@@ -599,11 +611,15 @@ async function sendRequestSse(
                             currentAccountId,
                             lastStatusCode,
                             lastErrorText,
-                            lastRetryAfterHeader
+                            lastRetryAfterHeader,
+                            modelName  // ✅ 传递 modelId
                         )
 
                         if (limitResult?.reason === "quota_exhausted") {
                             accountManager.moveToEndOfQueue(currentAccountId)
+                            // ✅ 新增：加入配额黑名单
+                            const { addToQuotaBlacklist } = await import("~/services/quota-blacklist")
+                            addToQuotaBlacklist("antigravity", currentAccountId, modelName || "")
                         }
 
                         if (allowRotation && accountManager.count() > 1) {
@@ -667,7 +683,7 @@ async function sendRequestSse(
                     throw new UpstreamError("antigravity", 401, lastErrorText, lastRetryAfterHeader)
                 }
 
-                if (shouldTryNextEndpoint(lastStatusCode)) {
+                if (shouldTryNextEndpoint(lastStatusCode, lastErrorText)) {
                     lastError = new Error("SSE API error: " + response.status)
                     continue
                 }
@@ -753,9 +769,18 @@ async function* sendRequestSseStreaming(
                     if (response.status === 429 && currentAccountId) {
                         const quotaExhausted = isQuotaExhaustedErrorText(errorText)
                         if (quotaExhausted) {
-                            const limitResult = await accountManager.markRateLimitedFromError(currentAccountId, response.status, errorText)
+                            const limitResult = await accountManager.markRateLimitedFromError(
+                                currentAccountId,
+                                response.status,
+                                errorText,
+                                undefined,
+                                modelName  // ✅ 传递 modelId
+                            )
                             if (limitResult?.reason === "quota_exhausted") {
                                 accountManager.moveToEndOfQueue(currentAccountId)
+                                // ✅ 新增：加入配额黑名单
+                                const { addToQuotaBlacklist } = await import("~/services/quota-blacklist")
+                                addToQuotaBlacklist("antigravity", currentAccountId, modelName || "")
                             }
                             lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                             throw lastError
@@ -787,7 +812,7 @@ async function* sendRequestSseStreaming(
                         ;(upstream as any).retryable = true
                         throw upstream
                     }
-                    if (shouldTryNextEndpoint(response.status)) {
+                    if (shouldTryNextEndpoint(response.status, errorText)) {
                         lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                         continue
                     }

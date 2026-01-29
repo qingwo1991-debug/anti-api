@@ -100,18 +100,19 @@ function defaultRateLimitMs(reason: RateLimitReason, failures: number): number {
     switch (reason) {
         case "quota_exhausted": {
             // [智能限流] 根据连续失败次数动态调整锁定时间
-            // 第1次: 60s, 第2次: 5min, 第3次: 30min, 第4次+: 2h
+            // 🆕 延长锁定时间，避免反复尝试无配额账户
+            // 第1次: 5min, 第2次: 15min, 第3次: 1h, 第4次+: 2h
             if (failures <= 1) {
-                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 1st failure, lock for 60s")
-                return 60_000
-            }
-            if (failures === 2) {
-                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 2nd consecutive failure, lock for 5 minutes")
+                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 1st failure, lock for 5 minutes")
                 return 5 * 60_000
             }
+            if (failures === 2) {
+                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 2nd consecutive failure, lock for 15 minutes")
+                return 15 * 60_000
+            }
             if (failures === 3) {
-                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 3rd consecutive failure, lock for 30 minutes")
-                return 30 * 60_000
+                consola.warn("Detected quota exhausted (QUOTA_EXHAUSTED), 3rd consecutive failure, lock for 1 hour")
+                return 60 * 60_000
             }
             consola.warn(`Detected quota exhausted (QUOTA_EXHAUSTED), ${failures} consecutive failures, lock for 2 hours`)
             return 2 * 60 * 60_000
@@ -824,6 +825,13 @@ class AccountManager {
             const account = this.accounts.get(accountId)
             if (!account) {
                 console.log(`[AccountManager] ❌ Account ${accountId} not found`)
+                return false
+            }
+
+            // ✅ 新增：检查配额黑名单
+            const { isQuotaBlacklisted } = await import("~/services/quota-blacklist")
+            if (isQuotaBlacklisted("antigravity", accountId, modelId)) {
+                console.log(`[AccountManager] ${account.email}: ${modelId} in quota blacklist`)
                 return false
             }
 

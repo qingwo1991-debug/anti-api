@@ -17,6 +17,7 @@ import { getAccountModelQuotaPercent } from "~/services/quota-aggregator"
 import { getSetting } from "~/services/settings"
 import { normalizeModelName } from "./model-aliases"
 import { accountSelector } from "~/services/account-selector"
+import { isQuotaBlacklisted, addToQuotaBlacklist } from "~/services/quota-blacklist"
 
 export class RoutingError extends Error {
     status: number
@@ -63,9 +64,7 @@ function isEntryUsable(entry: RoutingEntry): boolean {
 // 🆕 Router 级别的配额缓存（5秒 TTL，减少配额检查开销）
 const routerQuotaCache = new Map<string, { percent: number | null; expiry: number }>()
 const ROUTER_QUOTA_CACHE_TTL = 5000 // 5秒
-// 🆕 配额黑名单（5分钟，避免重复检查 0% 配额账户）
-const quotaBlacklist = new Map<string, number>() // "provider:accountId:model" -> expiry
-const QUOTA_BLACKLIST_DURATION = 5 * 60 * 1000 // 5分钟
+// 配额黑名单已迁移到 ~/services/quota-blacklist 共享模块
 
 const PROVIDER_ORDER: AuthProvider[] = ["antigravity", "codex", "copilot"]
 let officialModelIndex: Map<string, Set<AuthProvider>> | null = null
@@ -83,21 +82,7 @@ function getQuotaCachedPercent(provider: string, accountId: string, model: strin
     return percent
 }
 
-function isQuotaBlacklisted(provider: string, accountId: string, model: string): boolean {
-    const key = `${provider}:${accountId}:${model}`
-    const expiry = quotaBlacklist.get(key)
-    if (!expiry) return false
-    if (Date.now() > expiry) {
-        quotaBlacklist.delete(key)
-        return false
-    }
-    return true
-}
-
-function addToQuotaBlacklist(provider: string, accountId: string, model: string): void {
-    const key = `${provider}:${accountId}:${model}`
-    quotaBlacklist.set(key, Date.now() + QUOTA_BLACKLIST_DURATION)
-}
+// isQuotaBlacklisted and addToQuotaBlacklist are now imported from ~/services/quota-blacklist
 
 function getFlowStickyState(flowKey: string, entriesLength: number): FlowStickyState {
     const existing = flowStickyStates.get(flowKey)
