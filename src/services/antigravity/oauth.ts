@@ -7,6 +7,8 @@ import https from "https"
 import { state } from "~/lib/state"
 import consola from "consola"
 
+import { getAntigravityUserAgentSync } from "~/lib/version-fetcher"
+
 // OAuth 配置（来自 CLIProxyAPI）
 export const OAUTH_CONFIG = {
     clientId: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
@@ -25,7 +27,10 @@ export const OAUTH_CONFIG = {
     ],
 }
 
-const PROJECT_USER_AGENT = "antigravity/1.11.9 windows/amd64"
+// 使用函数调用而不是常量，以获取缓存后的最新版本
+function getProjectUserAgent(): string {
+    return getAntigravityUserAgentSync()
+}
 
 /**
  * 生成随机 state 用于 CSRF 保护
@@ -118,7 +123,7 @@ export async function getProjectID(accessToken: string): Promise<string | null> 
             headers: {
                 Authorization: `Bearer ${accessToken}`,
                 "Content-Type": "application/json",
-                "User-Agent": PROJECT_USER_AGENT,
+                "User-Agent": getProjectUserAgent(),
             },
             body: JSON.stringify({
                 metadata: {

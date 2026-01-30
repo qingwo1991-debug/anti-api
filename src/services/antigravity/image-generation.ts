@@ -14,13 +14,14 @@ import { isAccountDisabled } from "~/services/routing/config"
 import { getAccountModelQuotaPercent } from "~/services/quota-aggregator"
 import { getSetting } from "~/services/settings"
 
+import { getAntigravityUserAgentSync } from "~/lib/version-fetcher"
+
 const ANTIGRAVITY_BASE_URLS = [
     "https://daily-cloudcode-pa.googleapis.com",
     "https://daily-cloudcode-pa.sandbox.googleapis.com",
     "https://cloudcode-pa.googleapis.com",
 ]
 const STREAM_ENDPOINT = "/v1internal:streamGenerateContent"
-const DEFAULT_USER_AGENT = "antigravity/1.11.9 windows/amd64"
 const FETCH_TIMEOUT_MS = 120000  // Image generation may take longer
 
 // Image model name is always "gemini-3-pro-image" for the API
@@ -225,7 +226,7 @@ async function sendImageRequest(
                 headers: {
                     "Content-Type": "application/json",
                     "Authorization": "Bearer " + accessToken,
-                    "User-Agent": DEFAULT_USER_AGENT,
+                    "User-Agent": getAntigravityUserAgentSync(),
                     "Accept": "text/event-stream",
                 },
                 body: JSON.stringify(antigravityRequest),

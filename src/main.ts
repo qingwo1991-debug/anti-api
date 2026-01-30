@@ -15,6 +15,7 @@ import { initAuth, isAuthenticated, saveAuth, startOAuthLogin } from "./services
 import { getProjectID } from "./services/antigravity/oauth"
 import { accountManager } from "./services/antigravity/account-manager"
 import { getSetting } from "./services/settings"
+import { warmupVersionCache } from "./lib/version-fetcher"
 
 /**
  * 打开浏览器
@@ -118,6 +119,9 @@ const start = defineCommand({
         // 打印启动 banner
         const { logStartup, logStartupSuccess } = await import("./lib/logger")
         console.log(`\n🚀 Anti-API v${VERSION} starting...`)
+
+        // 预热 Antigravity 版本缓存（从 Marketplace 获取最新版本）
+        await warmupVersionCache()
         logStartup(state.port)
 
         // 启动服务器
