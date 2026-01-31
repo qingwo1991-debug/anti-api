@@ -526,6 +526,14 @@ function shouldTryNextEndpoint(statusCode: number, errorText?: string): boolean 
     return false
 }
 
+// 🆕 检查是否是账号/模型级别的 404 错误（需要切换账号）
+function isAccountModelNotFoundError(statusCode: number, errorText?: string): boolean {
+    if (statusCode !== 404) return false
+    const lower = (errorText || "").toLowerCase()
+    // "Requested entity was not found" 或类似错误表示该账号无法访问此模型
+    return lower.includes("not found") && !lower.includes("endpoint")
+}
+
 async function sendRequestSse(
     endpoint: string,
     antigravityRequest: any,
@@ -687,6 +695,14 @@ async function sendRequestSse(
                     lastError = new Error("SSE API error: " + response.status)
                     continue
                 }
+                
+                // 🆕 404 账号/模型级别错误：记录日志并向上抛出，由 router 层处理 fallback
+                if (isAccountModelNotFoundError(lastStatusCode, lastErrorText)) {
+                    consola.warn(`[404] Account ${currentAccountId || 'unknown'} cannot access model ${modelName || 'unknown'}`)
+                    const upstream = new UpstreamError("antigravity", lastStatusCode, lastErrorText, lastRetryAfterHeader)
+                    ;(upstream as any).retryable = true
+                    throw upstream
+                }
 
                 throw new UpstreamError("antigravity", response.status, lastErrorText, lastRetryAfterHeader)
             } catch (e) {
@@ -816,6 +832,16 @@ async function* sendRequestSseStreaming(
                         lastError = new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                         continue
                     }
+                    
+                    // 🆕 404 账号/模型级别错误：记录日志并向上抛出，由 router 层处理 fallback
+                    if (isAccountModelNotFoundError(response.status, errorText)) {
+                        consola.warn(`[404] Account ${currentAccountId || 'unknown'} cannot access model ${modelName || 'unknown'}`)
+                        // 标记为可重试，让 router 层能进行 fallback
+                        const upstream = new UpstreamError("antigravity", response.status, errorText)
+                        ;(upstream as any).retryable = true
+                        throw upstream
+                    }
+                    
                     throw new UpstreamError("antigravity", response.status, errorText, response.headers.get("retry-after") || undefined)
                 }
 

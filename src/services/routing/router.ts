@@ -7,7 +7,7 @@ import { createCodexCompletion } from "~/services/codex/chat"
 import { createCopilotCompletion } from "~/services/copilot/chat"
 import { authStore } from "~/services/auth/store"
 import type { ProviderAccount } from "~/services/auth/types"
-import { loadRoutingConfig, isAccountDisabled, type RoutingEntry, type RoutingConfig, type AccountRoutingEntry } from "./config"
+import { loadRoutingConfig, isAccountDisabled, resolveModelMapping, type RoutingEntry, type RoutingConfig, type AccountRoutingEntry } from "./config"
 import { getProviderModels, isHiddenCodexModel } from "./models"
 import { buildMessageStart, buildContentBlockStart, buildTextDelta, buildInputJsonDelta, buildContentBlockStop, buildMessageDelta, buildMessageStop } from "~/lib/translator"
 import { formatLogTime, setRequestLogContext } from "~/lib/logger"
@@ -248,7 +248,7 @@ function getAccountDisplay(provider: AuthProvider, accountId: string): string {
     return account?.login || account?.email || account?.label || accountId
 }
 
-const FALLBACK_STATUSES = new Set([401, 403, 408, 429, 500, 503, 529])
+const FALLBACK_STATUSES = new Set([401, 403, 404, 408, 429, 500, 503, 529])
 const FLOW_PROBE_INTERVAL_MS = 30_000
 
 function isAccountUnavailableError(error: unknown): boolean {
@@ -1071,11 +1071,15 @@ async function* createFlowCompletionStreamWithEntries(request: RoutedRequest, en
 
 async function* createAccountCompletionStreamWithEntries(request: RoutedRequest, entries: AccountRoutingEntry[]): AsyncGenerator<string, void, unknown> {
     let lastError: Error | null = null
+    let all404 = true  // 🆕 追踪是否所有尝试都是 404
     const accountState = getAccountStickyState(request.model, entries.length)
     const startIndex = accountState?.cursor ?? 0
 
     // 🐛 修复：添加配额检查（与 shouldSkipFlowEntry 相同逻辑）
     const reservePercent = getSetting("quotaReservePercent") || 0
+    
+    // 🆕 调度日志：显示可用账号
+    console.log(`[Router] Account routing for ${request.model}: ${entries.length} entries, starting at index ${startIndex}`)
 
     for (let offset = 0; offset < entries.length; offset++) {
         const index = (startIndex + offset) % entries.length
@@ -1219,7 +1223,14 @@ async function* createAccountCompletionStreamWithEntries(request: RoutedRequest,
 }
 
 export async function* createRoutedCompletionStream(request: RoutedRequest): AsyncGenerator<string, void, unknown> {
-    // Token Saver: 检测后台任务（在其他检查之前）
+    // 🆕 Step 1: 模型映射（最高优先级，在所有其他处理之前）
+    const mappingResult = resolveModelMapping(request.model)
+    if (mappingResult.mapped) {
+        console.log(`\x1b[36m[Router] Model mapping: ${mappingResult.originalModel} → ${mappingResult.model}\x1b[0m`)
+        request = { ...request, model: mappingResult.model }
+    }
+    
+    // Step 2: Token Saver - 检测后台任务
     const tokenSaverEnabled = getSetting("tokenSaverEnabled")
     const tokenSaverResult = applyTokenSaver(request.model, request.messages, tokenSaverEnabled)
     if (tokenSaverResult.shouldRedirect) {
@@ -1258,6 +1269,7 @@ export async function* createRoutedCompletionStream(request: RoutedRequest): Asy
     }
 
     const config = loadRoutingConfig()
+    // 🆕 normalizeModelName 仍然保留，用于处理日期后缀等别名（但映射已经在前面处理了）
     const normalizedModel = normalizeModelName(request.model)
 
     // Debug logging for model normalization

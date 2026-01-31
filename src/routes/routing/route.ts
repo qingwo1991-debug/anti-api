@@ -1,9 +1,22 @@
 import { Hono } from "hono"
 import { authStore } from "~/services/auth/store"
 import { getProviderModels } from "~/services/routing/models"
-import { loadRoutingConfig, saveRoutingConfig, setActiveFlow, toggleAccountDisabled, type RoutingEntry, type RoutingFlow, type AccountRoutingConfig } from "~/services/routing/config"
+import { 
+    loadRoutingConfig, 
+    saveRoutingConfig, 
+    setActiveFlow, 
+    toggleAccountDisabled, 
+    getModelMappings,
+    saveModelMappings,
+    PRESET_SOURCE_MODELS,
+    type RoutingEntry, 
+    type RoutingFlow, 
+    type AccountRoutingConfig,
+    type ModelMapping,
+} from "~/services/routing/config"
 import { accountManager } from "~/services/antigravity/account-manager"
 import { getAggregatedQuota } from "~/services/quota-aggregator"
+import { AVAILABLE_MODELS } from "~/lib/config"
 import { readFileSync } from "fs"
 import { join } from "path"
 import { randomUUID } from "crypto"
@@ -200,4 +213,85 @@ routingRouter.post("/toggle-account", async (c) => {
     const result = toggleAccountDisabled(body.provider, body.accountId)
     console.log(`[Routing] Account ${body.provider}/${body.accountId} ${result.disabled ? "DISABLED" : "ENABLED"}`)
     return c.json({ success: true, disabled: result.disabled })
+})
+
+// ==================== 🆕 模型映射 API ====================
+
+// 获取模型映射配置
+routingRouter.get("/model-mappings", async (c) => {
+    const mappings = getModelMappings()
+    // 获取 Antigravity 支持的目标模型列表
+    const targetModels = AVAILABLE_MODELS.map(m => ({ id: m.id, name: m.name }))
+    return c.json({ 
+        mappings, 
+        presets: PRESET_SOURCE_MODELS,
+        targetModels,
+    })
+})
+
+// 保存模型映射配置
+routingRouter.post("/model-mappings", async (c) => {
+    const body = await c.req.json<{ mappings: ModelMapping[] }>()
+    if (!Array.isArray(body.mappings)) {
+        return c.json({ error: "Invalid mappings format" }, 400)
+    }
+    
+    const config = saveModelMappings(body.mappings)
+    console.log(`[Routing] Saved ${body.mappings.length} model mappings`)
+    return c.json({ success: true, mappings: config.modelMappings })
+})
+
+// 添加单条模型映射
+routingRouter.post("/model-mappings/add", async (c) => {
+    const body = await c.req.json<{ source: string; target: string }>()
+    if (!body.source || !body.target) {
+        return c.json({ error: "Missing source or target" }, 400)
+    }
+    
+    const mappings = getModelMappings()
+    const newMapping: ModelMapping = {
+        id: randomUUID(),
+        source: body.source.trim().toLowerCase(),
+        target: body.target.trim(),
+        enabled: true,
+    }
+    mappings.push(newMapping)
+    saveModelMappings(mappings)
+    
+    console.log(`[Routing] Added model mapping: ${newMapping.source} → ${newMapping.target}`)
+    return c.json({ success: true, mapping: newMapping })
+})
+
+// 删除模型映射
+routingRouter.delete("/model-mappings/:id", async (c) => {
+    const id = c.req.param("id")
+    const mappings = getModelMappings()
+    const index = mappings.findIndex(m => m.id === id)
+    
+    if (index < 0) {
+        return c.json({ error: "Mapping not found" }, 404)
+    }
+    
+    const removed = mappings.splice(index, 1)[0]
+    saveModelMappings(mappings)
+    
+    console.log(`[Routing] Deleted model mapping: ${removed.source} → ${removed.target}`)
+    return c.json({ success: true })
+})
+
+// 切换模型映射启用状态
+routingRouter.post("/model-mappings/:id/toggle", async (c) => {
+    const id = c.req.param("id")
+    const mappings = getModelMappings()
+    const mapping = mappings.find(m => m.id === id)
+    
+    if (!mapping) {
+        return c.json({ error: "Mapping not found" }, 404)
+    }
+    
+    mapping.enabled = !mapping.enabled
+    saveModelMappings(mappings)
+    
+    console.log(`[Routing] Model mapping ${mapping.source} → ${mapping.target} ${mapping.enabled ? "ENABLED" : "DISABLED"}`)
+    return c.json({ success: true, enabled: mapping.enabled })
 })

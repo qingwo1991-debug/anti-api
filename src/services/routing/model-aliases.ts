@@ -26,6 +26,31 @@ const MODEL_ALIASES: Record<string, string> = {
 }
 
 /**
+ * 🆕 404 Fallback 映射表
+ * 当某个模型对所有账号都返回 404 时，自动尝试这些替代模型
+ * 这些模型功能相似但可能使用不同的配额池
+ */
+export const MODEL_404_FALLBACKS: Record<string, string[]> = {
+  // Claude Haiku 系列 -> Gemini Flash (都是快速轻量模型)
+  'claude-haiku-4-5': ['gemini-2.5-flash', 'gemini-3-flash'],
+  'claude-haiku-4-5-thinking': ['gemini-2.5-flash-thinking', 'gemini-2.5-flash'],
+  
+  // Claude Sonnet 系列 -> Gemini Pro (中等能力模型)
+  'claude-sonnet-4-5': ['gemini-2.5-pro', 'gemini-3-pro'],
+  'claude-sonnet-4-5-thinking': ['gemini-2.5-pro', 'gemini-3-pro'],
+  
+  // Claude Opus 系列 -> Gemini Pro High (高能力模型)
+  'claude-opus-4-5-thinking': ['gemini-3-pro-high', 'gemini-2.5-pro'],
+}
+
+/**
+ * 获取模型的 404 fallback 列表
+ */
+export function getModel404Fallbacks(modelName: string): string[] {
+  return MODEL_404_FALLBACKS[modelName] || []
+}
+
+/**
  * Normalizes model names by mapping aliases to standard model names.
  *
  * This function:
